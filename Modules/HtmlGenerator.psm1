@@ -617,22 +617,14 @@ function Get-HtmlTemplate {
     }
 
     .subsection ul {
-      list-style: none;
-      padding-left: 0;
+      list-style: disc;
+      padding-left: 1.2rem;
+      margin: 0.25rem 0;
     }
 
     .subsection li {
       font-size: 0.85rem;
-      padding: 0.2rem 0;
-      padding-left: 1rem;
-      position: relative;
-    }
-
-    .subsection li::before {
-      content: "\\2022";
-      position: absolute;
-      left: 0;
-      color: var(--primary-color);
+      padding: 0.15rem 0;
     }
 
     .exclusions {
