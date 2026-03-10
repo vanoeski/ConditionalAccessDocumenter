@@ -411,9 +411,7 @@ function Get-ConditionalAccessPolicies {
     [CmdletBinding()]
     param()
 
-    Write-Host "Fetching Conditional Access Policies..." -ForegroundColor Cyan
-
-    $policies = Invoke-GraphRequest -Uri "/identity/conditionalAccess/policies" -All
+    $policies = @(Invoke-GraphRequest -Uri "/identity/conditionalAccess/policies" -All)
 
     Write-Host "Found $($policies.Count) Conditional Access Policies" -ForegroundColor Green
 

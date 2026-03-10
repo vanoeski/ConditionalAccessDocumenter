@@ -174,9 +174,7 @@ Write-Host ""
 
 #region Fetch Policies
 
-Write-Host "Fetching Conditional Access Policies..." -ForegroundColor Cyan
-
-$rawPolicies = Get-ConditionalAccessPolicies
+$rawPolicies = @(Get-ConditionalAccessPolicies)
 
 if (-not $rawPolicies -or $rawPolicies.Count -eq 0) {
     Write-Warning "No Conditional Access policies found in this tenant."
@@ -196,12 +194,12 @@ Write-Host "This may take a few minutes depending on the number of policies." -F
 Write-Host ""
 
 $policies = @()
-$totalPolicies = $rawPolicies.Count
+$totalPolicies = @($rawPolicies).Count
 $currentPolicy = 0
 
 foreach ($rawPolicy in $rawPolicies) {
     $currentPolicy++
-    $percentComplete = [math]::Round(($currentPolicy / $totalPolicies) * 100)
+    $percentComplete = if ($totalPolicies -gt 0) { [math]::Round(($currentPolicy / $totalPolicies) * 100) } else { 0 }
 
     Write-Progress -Activity "Processing Policies" -Status "$currentPolicy of $totalPolicies - $($rawPolicy.displayName)" -PercentComplete $percentComplete
 

@@ -291,7 +291,7 @@ function Write-ContentTypesXml {
 </Types>
 "@
 
-    $xml | Out-File -FilePath (Join-Path $TempDir "[Content_Types].xml") -Encoding UTF8
+    $xml | Out-File -LiteralPath (Join-Path $TempDir "[Content_Types].xml") -Encoding UTF8
 }
 
 function Write-RootRelsXml {
