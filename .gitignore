@@ -1,0 +1,22 @@
+# Output directory
+Output/
+
+# Temporary files
+*.tmp
+tmpclaude-*
+
+# PowerShell module cache
+*.psm1.bak
+
+# IDE files
+.vscode/
+.idea/
+*.code-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log

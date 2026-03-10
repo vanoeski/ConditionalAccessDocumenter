@@ -1,0 +1,15 @@
+{
+    "outputDirectory": "./Output",
+    "pptxFileName": "ConditionalAccessPolicies.pptx",
+    "htmlFileName": "ConditionalAccessPolicies.html",
+    "includeDisabledPolicies": true,
+    "theme": {
+        "primaryColor": "#0078D4",
+        "enabledColor": "#107C10",
+        "disabledColor": "#A80000",
+        "reportOnlyColor": "#FFB900"
+    },
+    "graphApiVersion": "v1.0",
+    "maxRetryAttempts": 3,
+    "retryDelaySeconds": 2
+}
