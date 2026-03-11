@@ -947,6 +947,7 @@ function Get-HtmlTemplate {
       <div class="nav-tab active" data-view="cards">Policy Cards</div>
       <div class="nav-tab" data-view="matrix">Coverage Matrix</div>
       <div class="nav-tab" data-view="analyzer">Overlap Analyzer</div>
+      <div class="nav-tab" data-view="applookup">App Lookup</div>
     </div>
     <div class="nav-stats">
       <div class="stat-item">
@@ -1009,6 +1010,23 @@ $PoliciesHtml
       </div>
     </div>
 
+    <!-- View 4: App Lookup -->
+    <div id="view-applookup" class="view">
+      <div class="view-header">
+        <h2 class="view-title">App Lookup</h2>
+        <div class="view-controls">
+          <input type="search" class="search-input" id="app-search" placeholder="Search applications..." oninput="filterAppLookup()" style="min-width:280px">
+          <select class="filter-select" id="app-select" onchange="selectApp(this.value)" style="min-width:220px">
+            <option value="">-- or select an app --</option>
+          </select>
+        </div>
+      </div>
+      <div id="applookup-summary" style="padding:0 1.5rem 0.5rem; color:var(--text-secondary); font-size:0.9rem;"></div>
+      <div class="cards-container" id="applookup-results">
+        <p style="color:var(--text-muted); padding:1rem;">Enter an application name to find matching policies.</p>
+      </div>
+    </div>
+
     <!-- View 3: Overlap Analyzer -->
     <div id="view-analyzer" class="view">
       <div class="view-header">
@@ -1046,6 +1064,7 @@ $PoliciesHtml
 
         if (tab.dataset.view === 'matrix') buildMatrix();
         if (tab.dataset.view === 'analyzer') runAnalysis();
+        if (tab.dataset.view === 'applookup') initAppLookup();
       });
     });
 
@@ -1417,6 +1436,78 @@ $PoliciesHtml
       const div = document.createElement('div');
       div.textContent = str;
       return div.innerHTML;
+    }
+
+    // App Lookup
+    // Office365 is a Microsoft umbrella token covering Exchange, SharePoint, Teams, etc.
+    const OFFICE365_APPS = ['exchange online','sharepoint online','teams','office 365','microsoft 365','onedrive','yammer','planner','forms','stream','viva'];
+    let appLookupInitialized = false;
+
+    function initAppLookup() {
+      if (appLookupInitialized) return;
+      appLookupInitialized = true;
+      // Collect all unique app names from all policies
+      const appSet = new Set();
+      policiesData.forEach(p => {
+          const ia = arr(((p.Conditions || {}).Applications || {}).IncludeApplications);
+        ia.forEach(a => { if (a && a !== 'All' && a !== 'Office365') appSet.add(a); });
+      });
+      const sorted = Array.from(appSet).sort((a,b) => a.localeCompare(b));
+      const sel = document.getElementById('app-select');
+      sorted.forEach(a => {
+        const opt = document.createElement('option');
+        opt.value = a; opt.textContent = a;
+        sel.appendChild(opt);
+      });
+    }
+
+    function selectApp(val) {
+      document.getElementById('app-search').value = val;
+      runAppLookup(val);
+    }
+
+    function filterAppLookup() {
+      const val = document.getElementById('app-search').value.trim();
+      // Sync the dropdown if an exact match exists
+      const sel = document.getElementById('app-select');
+      sel.value = Array.from(sel.options).some(o => o.value === val) ? val : '';
+      runAppLookup(val);
+    }
+
+    function runAppLookup(query) {
+      const container = document.getElementById('applookup-results');
+      const summary = document.getElementById('applookup-summary');
+      if (!query) {
+        container.innerHTML = '<p style="color:var(--text-muted);padding:1rem;">Enter an application name to find matching policies.</p>';
+        summary.textContent = '';
+        return;
+      }
+      const q = query.toLowerCase();
+      // A policy matches if: IncludeApps contains 'All', contains 'Office365' and query looks
+      // like an O365 app, or the app name matches the query string.
+      const isO365Query = OFFICE365_APPS.some(k => q.includes(k) || k.includes(q));
+      const matched = policiesData.filter(p => {
+        const ia = arr(((p.Conditions || {}).Applications || {}).IncludeApplications);
+        if (ia.includes('All')) return true;
+        if (ia.includes('Office365') && isO365Query) return true;
+        return ia.some(a => a.toLowerCase().includes(q));
+      });
+      if (!matched.length) {
+        container.innerHTML = '<p style="color:var(--text-muted);padding:1rem;">No policies found for "' + escapeHtml(query) + '".</p>';
+        summary.textContent = '';
+        return;
+      }
+      const enabledCount = matched.filter(p => p.StateRaw === 'enabled').length;
+      const roCount = matched.filter(p => p.StateRaw === 'enabledForReportingButNotEnforced').length;
+      summary.innerHTML = matched.length + ' polic' + (matched.length === 1 ? 'y' : 'ies') + ' apply to &ldquo;' + escapeHtml(query) + '&rdquo; &mdash; ' + enabledCount + ' enforced, ' + roCount + ' report-only';
+      // Reuse the existing static card HTML from the DOM, filtered to matched IDs
+      const matchedIds = new Set(matched.map(p => p.Id));
+      const allCards = Array.from(document.querySelectorAll('#cards-container .policy-card'));
+      const html = allCards
+        .filter(c => matchedIds.has(c.dataset.id))
+        .map(c => c.outerHTML)
+        .join('');
+      container.innerHTML = html || '<p style="color:var(--text-muted);padding:1rem;">No matching cards found.</p>';
     }
   </script>
 </body>
