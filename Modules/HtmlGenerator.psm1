@@ -1,14 +1,15 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    HTML Generator Module for Conditional Access Policy Documenter
+    Advanced HTML Generator Module for Conditional Access Policy Documenter
 
 .DESCRIPTION
-    Generates a self-contained, interactive HTML report with embedded CSS and JavaScript.
-    No external dependencies required.
+    Generates a self-contained, interactive HTML report with multiple analysis views:
+    - Policy Cards: Filterable, expandable policy details
+    - Coverage Matrix: 2D grid of users/groups vs applications
+    - Overlap Analyzer: Conflict and subset detection
 #>
 
-# Script-level theme configuration
 $script:HtmlTheme = @{
     PrimaryColor    = "#0078D4"
     EnabledColor    = "#107C10"
@@ -17,19 +18,6 @@ $script:HtmlTheme = @{
 }
 
 function New-HtmlReport {
-    <#
-    .SYNOPSIS
-        Generates a complete HTML report for Conditional Access Policies
-
-    .PARAMETER Policies
-        Array of parsed policy objects
-
-    .PARAMETER Title
-        Report title
-
-    .PARAMETER Path
-        Output file path
-    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -42,13 +30,11 @@ function New-HtmlReport {
         [string]$Path
     )
 
-    # Ensure output directory exists
     $outputDir = Split-Path -Parent $Path
     if ($outputDir -and -not (Test-Path $outputDir)) {
         New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
     }
 
-    # Calculate statistics
     $stats = @{
         Total      = $Policies.Count
         Enabled    = ($Policies | Where-Object { $_.StateRaw -eq "enabled" }).Count
@@ -56,19 +42,11 @@ function New-HtmlReport {
         ReportOnly = ($Policies | Where-Object { $_.StateRaw -eq "enabledForReportingButNotEnforced" }).Count
     }
 
-    # Generate policy cards HTML
-    $policyCards = $Policies | ForEach-Object {
-        ConvertTo-PolicyHtmlCard -Policy $_
-    }
+    $policyCards = $Policies | ForEach-Object { ConvertTo-PolicyHtmlCard -Policy $_ }
     $policyCardsHtml = $policyCards -join "`n"
-
-    # Convert policies to JSON for JavaScript
     $policiesJson = $Policies | ConvertTo-Json -Depth 10 -Compress
 
-    # Generate the complete HTML document
     $html = Get-HtmlTemplate -Title $Title -Stats $stats -PoliciesHtml $policyCardsHtml -PoliciesJson $policiesJson
-
-    # Write to file
     $html | Out-File -FilePath $Path -Encoding UTF8
 
     Write-Host "HTML report saved to: $Path" -ForegroundColor Green
@@ -76,10 +54,6 @@ function New-HtmlReport {
 }
 
 function ConvertTo-PolicyHtmlCard {
-    <#
-    .SYNOPSIS
-        Converts a policy object to an HTML card element
-    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -96,20 +70,13 @@ function ConvertTo-PolicyHtmlCard {
     $policyName = [System.Web.HttpUtility]::HtmlEncode($Policy.DisplayName)
     $policyId = [System.Web.HttpUtility]::HtmlEncode($Policy.Id)
 
-    # Build users section
     $usersHtml = Get-UsersSectionHtml -Users $Policy.Conditions.Users
-
-    # Build applications section
     $appsHtml = Get-ApplicationsSectionHtml -Applications $Policy.Conditions.Applications
-
-    # Build conditions section
     $conditionsHtml = Get-ConditionsSectionHtml -Conditions $Policy.Conditions
-
-    # Build controls section
     $controlsHtml = Get-ControlsSectionHtml -GrantControls $Policy.GrantControls -SessionControls $Policy.SessionControls
 
     return @"
-    <div class="policy-card" data-state="$($Policy.StateRaw)" data-name="$policyName">
+    <div class="policy-card" data-state="$($Policy.StateRaw)" data-name="$policyName" data-id="$policyId">
       <div class="policy-header" onclick="toggleCard(this)">
         <div class="policy-title">
           <h3>$policyName</h3>
@@ -140,8 +107,8 @@ function ConvertTo-PolicyHtmlCard {
           </div>
         </div>
         <div class="policy-footer">
-          <span>Modified: $($Policy.ModifiedDateTime)</span>
-          <button class="copy-btn" onclick="copyPolicyId('$policyId')">Copy ID</button>
+          <span class="modified-date">Modified: $($Policy.ModifiedDateTime)</span>
+          <button class="copy-btn" onclick="event.stopPropagation(); copyPolicyId('$policyId')">Copy ID</button>
         </div>
       </div>
     </div>
@@ -150,14 +117,13 @@ function ConvertTo-PolicyHtmlCard {
 
 function Get-UsersSectionHtml {
     param([hashtable]$Users)
-
     $html = ""
 
     if ($Users.IncludeUsers.Count -gt 0) {
         $html += "<div class='subsection'><strong>Include Users:</strong><ul>"
         foreach ($user in $Users.IncludeUsers) {
-            $escapedUser = [System.Web.HttpUtility]::HtmlEncode($user)
-            $html += "<li>$escapedUser</li>"
+            $escaped = [System.Web.HttpUtility]::HtmlEncode($user)
+            $html += "<li>$escaped</li>"
         }
         $html += "</ul></div>"
     }
@@ -165,8 +131,8 @@ function Get-UsersSectionHtml {
     if ($Users.IncludeGroups.Count -gt 0) {
         $html += "<div class='subsection'><strong>Include Groups:</strong><ul>"
         foreach ($group in $Users.IncludeGroups) {
-            $escapedGroup = [System.Web.HttpUtility]::HtmlEncode($group)
-            $html += "<li>$escapedGroup</li>"
+            $escaped = [System.Web.HttpUtility]::HtmlEncode($group)
+            $html += "<li>$escaped</li>"
         }
         $html += "</ul></div>"
     }
@@ -174,48 +140,43 @@ function Get-UsersSectionHtml {
     if ($Users.IncludeRoles.Count -gt 0) {
         $html += "<div class='subsection'><strong>Include Roles:</strong><ul>"
         foreach ($role in $Users.IncludeRoles) {
-            $escapedRole = [System.Web.HttpUtility]::HtmlEncode($role)
-            $html += "<li>$escapedRole</li>"
+            $escaped = [System.Web.HttpUtility]::HtmlEncode($role)
+            $html += "<li>$escaped</li>"
         }
         $html += "</ul></div>"
     }
 
-    # Exclusions
     $hasExclusions = ($Users.ExcludeUsers.Count -gt 0) -or ($Users.ExcludeGroups.Count -gt 0) -or ($Users.ExcludeRoles.Count -gt 0)
     if ($hasExclusions) {
         $html += "<div class='subsection exclusions'><strong>Exclusions:</strong><ul>"
         foreach ($user in $Users.ExcludeUsers) {
-            $escapedUser = [System.Web.HttpUtility]::HtmlEncode($user)
-            $html += "<li>$escapedUser (User)</li>"
+            $escaped = [System.Web.HttpUtility]::HtmlEncode($user)
+            $html += "<li>$escaped (User)</li>"
         }
         foreach ($group in $Users.ExcludeGroups) {
-            $escapedGroup = [System.Web.HttpUtility]::HtmlEncode($group)
-            $html += "<li>$escapedGroup (Group)</li>"
+            $escaped = [System.Web.HttpUtility]::HtmlEncode($group)
+            $html += "<li>$escaped (Group)</li>"
         }
         foreach ($role in $Users.ExcludeRoles) {
-            $escapedRole = [System.Web.HttpUtility]::HtmlEncode($role)
-            $html += "<li>$escapedRole (Role)</li>"
+            $escaped = [System.Web.HttpUtility]::HtmlEncode($role)
+            $html += "<li>$escaped (Role)</li>"
         }
         $html += "</ul></div>"
     }
 
-    if (-not $html) {
-        $html = "<p class='empty'>No users configured</p>"
-    }
-
+    if (-not $html) { $html = "<p class='empty'>No users configured</p>" }
     return $html
 }
 
 function Get-ApplicationsSectionHtml {
     param([hashtable]$Applications)
-
     $html = ""
 
     if ($Applications.IncludeApplications.Count -gt 0) {
         $html += "<div class='subsection'><strong>Include Apps:</strong><ul>"
         foreach ($app in $Applications.IncludeApplications) {
-            $escapedApp = [System.Web.HttpUtility]::HtmlEncode($app)
-            $html += "<li>$escapedApp</li>"
+            $escaped = [System.Web.HttpUtility]::HtmlEncode($app)
+            $html += "<li>$escaped</li>"
         }
         $html += "</ul></div>"
     }
@@ -223,8 +184,8 @@ function Get-ApplicationsSectionHtml {
     if ($Applications.IncludeUserActions.Count -gt 0) {
         $html += "<div class='subsection'><strong>User Actions:</strong><ul>"
         foreach ($action in $Applications.IncludeUserActions) {
-            $escapedAction = [System.Web.HttpUtility]::HtmlEncode($action)
-            $html += "<li>$escapedAction</li>"
+            $escaped = [System.Web.HttpUtility]::HtmlEncode($action)
+            $html += "<li>$escaped</li>"
         }
         $html += "</ul></div>"
     }
@@ -232,55 +193,45 @@ function Get-ApplicationsSectionHtml {
     if ($Applications.ExcludeApplications.Count -gt 0) {
         $html += "<div class='subsection exclusions'><strong>Exclude Apps:</strong><ul>"
         foreach ($app in $Applications.ExcludeApplications) {
-            $escapedApp = [System.Web.HttpUtility]::HtmlEncode($app)
-            $html += "<li>$escapedApp</li>"
+            $escaped = [System.Web.HttpUtility]::HtmlEncode($app)
+            $html += "<li>$escaped</li>"
         }
         $html += "</ul></div>"
     }
 
-    if (-not $html) {
-        $html = "<p class='empty'>No applications configured</p>"
-    }
-
+    if (-not $html) { $html = "<p class='empty'>No applications configured</p>" }
     return $html
 }
 
 function Get-ConditionsSectionHtml {
     param([hashtable]$Conditions)
-
     $html = "<ul class='conditions-list'>"
 
-    # Platforms
     if ($Conditions.Platforms.IncludePlatforms.Count -gt 0) {
         $platforms = ($Conditions.Platforms.IncludePlatforms | ForEach-Object { [System.Web.HttpUtility]::HtmlEncode($_) }) -join ", "
         $html += "<li><strong>Platforms:</strong> $platforms</li>"
     }
 
-    # Locations
     if ($Conditions.Locations.IncludeLocations.Count -gt 0) {
         $locations = ($Conditions.Locations.IncludeLocations | ForEach-Object { [System.Web.HttpUtility]::HtmlEncode($_) }) -join ", "
         $html += "<li><strong>Locations:</strong> $locations</li>"
     }
 
-    # Client App Types
     if ($Conditions.ClientAppTypes.Count -gt 0) {
         $clientApps = ($Conditions.ClientAppTypes | ForEach-Object { [System.Web.HttpUtility]::HtmlEncode($_) }) -join ", "
         $html += "<li><strong>Client Apps:</strong> $clientApps</li>"
     }
 
-    # Sign-in Risk
     if ($Conditions.SignInRiskLevels.Count -gt 0) {
-        $riskLevels = ($Conditions.SignInRiskLevels | ForEach-Object { [System.Web.HttpUtility]::HtmlEncode($_) }) -join ", "
-        $html += "<li><strong>Sign-in Risk:</strong> $riskLevels</li>"
+        $risk = ($Conditions.SignInRiskLevels | ForEach-Object { [System.Web.HttpUtility]::HtmlEncode($_) }) -join ", "
+        $html += "<li><strong>Sign-in Risk:</strong> $risk</li>"
     }
 
-    # User Risk
     if ($Conditions.UserRiskLevels.Count -gt 0) {
-        $userRiskLevels = ($Conditions.UserRiskLevels | ForEach-Object { [System.Web.HttpUtility]::HtmlEncode($_) }) -join ", "
-        $html += "<li><strong>User Risk:</strong> $userRiskLevels</li>"
+        $userRisk = ($Conditions.UserRiskLevels | ForEach-Object { [System.Web.HttpUtility]::HtmlEncode($_) }) -join ", "
+        $html += "<li><strong>User Risk:</strong> $userRisk</li>"
     }
 
-    # Device Filter
     if ($Conditions.Devices.DeviceFilter) {
         $mode = [System.Web.HttpUtility]::HtmlEncode($Conditions.Devices.DeviceFilter.Mode)
         $rule = [System.Web.HttpUtility]::HtmlEncode($Conditions.Devices.DeviceFilter.Rule)
@@ -288,61 +239,46 @@ function Get-ConditionsSectionHtml {
     }
 
     $html += "</ul>"
-
     if ($html -eq "<ul class='conditions-list'></ul>") {
         $html = "<p class='empty'>No additional conditions</p>"
     }
-
     return $html
 }
 
 function Get-ControlsSectionHtml {
     param([hashtable]$GrantControls, [hashtable]$SessionControls)
-
     $html = ""
 
-    # Grant Controls
     if ($GrantControls.BuiltInControls.Count -gt 0) {
         $operator = if ($GrantControls.Operator -eq "AND") { "Require ALL of:" } else { "Require ONE of:" }
         $html += "<div class='subsection'><strong>Grant Controls ($operator)</strong><ul>"
         foreach ($control in $GrantControls.BuiltInControls) {
-            $escapedControl = [System.Web.HttpUtility]::HtmlEncode($control)
-            $html += "<li>$escapedControl</li>"
+            $escaped = [System.Web.HttpUtility]::HtmlEncode($control)
+            $html += "<li>$escaped</li>"
         }
         $html += "</ul></div>"
     }
 
-    # Authentication Strength
     if ($GrantControls.AuthenticationStrength) {
         $authStrength = [System.Web.HttpUtility]::HtmlEncode($GrantControls.AuthenticationStrength.DisplayName)
         $html += "<div class='subsection'><strong>Authentication Strength:</strong> $authStrength</div>"
     }
 
-    # Session Controls
     $sessionItems = @()
-
     if ($SessionControls.SignInFrequency) {
         $sif = [System.Web.HttpUtility]::HtmlEncode($SessionControls.SignInFrequency)
         $sessionItems += "<li>Sign-in frequency: $sif</li>"
     }
-
     if ($SessionControls.PersistentBrowser) {
         $pb = [System.Web.HttpUtility]::HtmlEncode($SessionControls.PersistentBrowser)
         $sessionItems += "<li>Persistent browser: $pb</li>"
     }
-
     if ($SessionControls.CloudAppSecurity) {
         $cas = [System.Web.HttpUtility]::HtmlEncode($SessionControls.CloudAppSecurity)
         $sessionItems += "<li>Cloud App Security: $cas</li>"
     }
-
     if ($SessionControls.ApplicationEnforcedRestrictions) {
         $sessionItems += "<li>App enforced restrictions: Enabled</li>"
-    }
-
-    if ($SessionControls.ContinuousAccessEvaluation) {
-        $cae = [System.Web.HttpUtility]::HtmlEncode($SessionControls.ContinuousAccessEvaluation)
-        $sessionItems += "<li>Continuous Access Evaluation: $cae</li>"
     }
 
     if ($sessionItems.Count -gt 0) {
@@ -351,10 +287,7 @@ function Get-ControlsSectionHtml {
         $html += "</ul></div>"
     }
 
-    if (-not $html) {
-        $html = "<p class='empty'>No access controls configured</p>"
-    }
-
+    if (-not $html) { $html = "<p class='empty'>No access controls configured</p>" }
     return $html
 }
 
@@ -366,7 +299,7 @@ function Get-HtmlTemplate {
         [string]$PoliciesJson
     )
 
-    $date = Get-Date -Format "MMMM d, yyyy 'at' h:mm tt"
+    $date = Get-Date -Format "yyyy-MM-dd HH:mm"
 
     return @"
 <!DOCTYPE html>
@@ -377,233 +310,282 @@ function Get-HtmlTemplate {
   <title>$Title</title>
   <style>
     :root {
-      --primary-color: $($script:HtmlTheme.PrimaryColor);
-      --enabled-color: $($script:HtmlTheme.EnabledColor);
-      --disabled-color: $($script:HtmlTheme.DisabledColor);
-      --reportonly-color: $($script:HtmlTheme.ReportOnlyColor);
-      --bg-color: #f5f5f5;
-      --card-bg: #ffffff;
-      --text-color: #333333;
-      --text-secondary: #666666;
-      --border-color: #e0e0e0;
+      --bg-primary: #0a0f1e;
+      --bg-secondary: #111827;
+      --bg-card: #1a2332;
+      --bg-hover: #243044;
+      --accent: $($script:HtmlTheme.PrimaryColor);
+      --accent-dim: #005a9e;
+      --text-primary: #e5e7eb;
+      --text-secondary: #9ca3af;
+      --text-muted: #6b7280;
+      --border: #2d3748;
+      --enabled: $($script:HtmlTheme.EnabledColor);
+      --disabled: $($script:HtmlTheme.DisabledColor);
+      --reportonly: $($script:HtmlTheme.ReportOnlyColor);
+      --gap: #dc2626;
+      --overlap: #f59e0b;
+      --shadow: 0 4px 6px -1px rgba(0,0,0,0.3);
     }
 
-    [data-theme="dark"] {
-      --bg-color: #1a1a2e;
-      --card-bg: #16213e;
-      --text-color: #eaeaea;
-      --text-secondary: #b0b0b0;
-      --border-color: #2a2a4a;
-    }
-
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      background-color: var(--bg-color);
-      color: var(--text-color);
-      line-height: 1.6;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      line-height: 1.5;
+      min-height: 100vh;
     }
 
-    header {
-      background: linear-gradient(135deg, var(--primary-color), #005a9e);
-      color: white;
-      padding: 2rem;
+    /* Top Navigation */
+    .top-nav {
       position: sticky;
       top: 0;
-      z-index: 100;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-    }
-
-    header h1 {
-      font-size: 1.8rem;
-      font-weight: 300;
-      margin-bottom: 1rem;
-    }
-
-    .controls {
+      z-index: 1000;
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border);
+      padding: 0 1.5rem;
       display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 60px;
+    }
+
+    .nav-brand {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: var(--accent);
+    }
+
+    .nav-tabs {
+      display: flex;
+      gap: 0.25rem;
+      height: 100%;
+    }
+
+    .nav-tab {
+      padding: 0 1.25rem;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 500;
+      border-bottom: 2px solid transparent;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .nav-tab:hover { color: var(--text-primary); background: var(--bg-hover); }
+    .nav-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    .nav-stats {
+      display: flex;
+      gap: 1.5rem;
+      font-size: 0.8rem;
+    }
+
+    .stat-item {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .stat-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .stat-dot.total { background: var(--accent); }
+    .stat-dot.enabled { background: var(--enabled); }
+    .stat-dot.reportonly { background: var(--reportonly); }
+    .stat-dot.disabled { background: var(--disabled); }
+
+    .stat-count { font-weight: 600; color: var(--text-primary); }
+    .stat-label { color: var(--text-muted); }
+
+    /* Main Content */
+    main {
+      max-width: 1600px;
+      margin: 0 auto;
+      padding: 1.5rem;
+    }
+
+    .view { display: none; }
+    .view.active { display: block; }
+
+    /* View Header */
+    .view-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1.5rem;
       flex-wrap: wrap;
       gap: 1rem;
-      align-items: center;
-      margin-bottom: 1rem;
     }
 
-    .controls input[type="search"] {
-      flex: 1;
-      min-width: 200px;
-      padding: 0.75rem 1rem;
-      border: none;
-      border-radius: 4px;
-      font-size: 1rem;
-      background: rgba(255,255,255,0.9);
-    }
-
-    .controls select {
-      padding: 0.75rem 1rem;
-      border: none;
-      border-radius: 4px;
-      font-size: 1rem;
-      background: rgba(255,255,255,0.9);
-      cursor: pointer;
-    }
-
-    .controls button {
-      padding: 0.75rem 1.5rem;
-      border: 2px solid white;
-      border-radius: 4px;
-      background: transparent;
-      color: white;
-      font-size: 1rem;
-      cursor: pointer;
-      transition: all 0.2s;
-    }
-
-    .controls button:hover {
-      background: white;
-      color: var(--primary-color);
-    }
-
-    .summary {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 1.5rem;
-    }
-
-    .summary-item {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-    }
-
-    .summary-count {
+    .view-title {
       font-size: 1.5rem;
-      font-weight: bold;
+      font-weight: 600;
     }
 
-    .summary-label {
-      opacity: 0.9;
+    .view-controls {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
     }
 
-    .dot {
-      width: 12px;
-      height: 12px;
-      border-radius: 50%;
-      display: inline-block;
+    .search-input {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.5rem 1rem;
+      color: var(--text-primary);
+      font-size: 0.9rem;
+      width: 250px;
     }
 
-    .dot-total { background: white; }
-    .dot-enabled { background: var(--enabled-color); }
-    .dot-disabled { background: var(--disabled-color); }
-    .dot-reportonly { background: var(--reportonly-color); }
+    .search-input:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
 
-    main {
-      max-width: 1400px;
-      margin: 0 auto;
-      padding: 2rem;
+    .filter-select {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.5rem 0.75rem;
+      color: var(--text-primary);
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
+
+    .btn {
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 0.5rem 1rem;
+      font-size: 0.85rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .btn:hover { background: var(--accent-dim); }
+    .btn-secondary {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover { background: var(--bg-hover); }
+
+    /* Policy Cards */
+    .cards-container {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
     }
 
     .policy-card {
-      background: var(--card-bg);
+      background: var(--bg-card);
       border-radius: 8px;
-      margin-bottom: 1rem;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      border-left: 4px solid var(--accent);
       overflow: hidden;
-      transition: box-shadow 0.2s;
+      transition: box-shadow 0.15s;
     }
 
-    .policy-card:hover {
-      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-    }
+    .policy-card:hover { box-shadow: var(--shadow); }
+    .policy-card[data-state="enabled"] { border-left-color: var(--enabled); }
+    .policy-card[data-state="disabled"] { border-left-color: var(--disabled); }
+    .policy-card[data-state="enabledForReportingButNotEnforced"] { border-left-color: var(--reportonly); }
 
     .policy-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 1rem 1.5rem;
+      padding: 1rem 1.25rem;
       cursor: pointer;
-      border-left: 4px solid var(--primary-color);
+      transition: background 0.15s;
     }
 
-    .policy-header:hover {
-      background: rgba(0,0,0,0.02);
-    }
+    .policy-header:hover { background: var(--bg-hover); }
 
     .policy-title h3 {
-      font-size: 1.1rem;
+      font-size: 1rem;
       font-weight: 600;
-      margin-bottom: 0.25rem;
+      margin-bottom: 0.2rem;
     }
 
     .policy-id {
-      font-size: 0.75rem;
-      color: var(--text-secondary);
-      font-family: monospace;
+      font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+      font-size: 0.7rem;
+      color: var(--text-muted);
     }
 
     .policy-badges {
       display: flex;
       align-items: center;
-      gap: 1rem;
+      gap: 0.75rem;
     }
 
     .state-badge {
-      padding: 0.25rem 0.75rem;
-      border-radius: 20px;
-      font-size: 0.8rem;
+      padding: 0.25rem 0.6rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
       font-weight: 600;
-      color: white;
+      text-transform: uppercase;
     }
 
-    .state-enabled { background: var(--enabled-color); }
-    .state-disabled { background: var(--disabled-color); }
-    .state-reportonly { background: var(--reportonly-color); }
+    .state-enabled { background: var(--enabled); color: white; }
+    .state-disabled { background: var(--disabled); color: white; }
+    .state-reportonly { background: var(--reportonly); color: #1a1a1a; }
 
     .expand-icon {
-      font-size: 1.5rem;
-      color: var(--text-secondary);
+      font-size: 1.25rem;
+      color: var(--text-muted);
       transition: transform 0.2s;
+      font-weight: 300;
     }
 
-    .policy-card.expanded .expand-icon {
-      transform: rotate(45deg);
-    }
+    .policy-card.expanded .expand-icon { transform: rotate(45deg); }
 
     .policy-content {
       display: none;
-      padding: 0 1.5rem 1.5rem;
-      border-top: 1px solid var(--border-color);
+      padding: 0 1.25rem 1.25rem;
+      border-top: 1px solid var(--border);
     }
 
-    .policy-card.expanded .policy-content {
-      display: block;
-    }
+    .policy-card.expanded .policy-content { display: block; }
 
     .policy-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 1.5rem;
-      margin-top: 1.5rem;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1rem;
+      margin-top: 1rem;
+    }
+
+    @media (max-width: 768px) {
+      .policy-grid { grid-template-columns: 1fr; }
     }
 
     .policy-section {
-      background: var(--bg-color);
-      padding: 1rem;
+      background: var(--bg-secondary);
       border-radius: 6px;
+      padding: 1rem;
     }
 
     .policy-section h4 {
-      color: var(--primary-color);
-      font-size: 0.9rem;
+      font-size: 0.8rem;
+      font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.5px;
+      letter-spacing: 0.05em;
+      color: var(--accent);
       margin-bottom: 0.75rem;
       padding-bottom: 0.5rem;
-      border-bottom: 2px solid var(--primary-color);
+      border-bottom: 1px solid var(--border);
     }
 
     .subsection {
@@ -611,31 +593,42 @@ function Get-HtmlTemplate {
     }
 
     .subsection strong {
-      font-size: 0.85rem;
+      font-size: 0.8rem;
+      color: var(--text-secondary);
       display: block;
       margin-bottom: 0.25rem;
     }
 
     .subsection ul {
-      list-style: disc;
-      padding-left: 1.2rem;
-      margin: 0.25rem 0;
+      list-style: none;
+      padding-left: 0;
     }
 
     .subsection li {
       font-size: 0.85rem;
-      padding: 0.15rem 0;
+      padding: 0.2rem 0;
+      padding-left: 1rem;
+      position: relative;
+    }
+
+    .subsection li::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0.6rem;
+      width: 4px;
+      height: 4px;
+      background: var(--accent);
+      border-radius: 50%;
     }
 
     .exclusions {
-      border-left: 3px solid var(--disabled-color);
+      border-left: 2px solid var(--disabled);
       padding-left: 0.75rem;
       margin-top: 0.5rem;
     }
 
-    .exclusions strong {
-      color: var(--disabled-color);
-    }
+    .exclusions strong { color: var(--disabled); }
 
     .conditions-list {
       list-style: none;
@@ -643,22 +636,24 @@ function Get-HtmlTemplate {
 
     .conditions-list li {
       font-size: 0.85rem;
-      padding: 0.3rem 0;
+      padding: 0.25rem 0;
     }
 
     .conditions-list code {
       display: block;
-      background: var(--card-bg);
+      background: var(--bg-primary);
       padding: 0.5rem;
       border-radius: 4px;
-      font-size: 0.8rem;
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 0.75rem;
       margin-top: 0.25rem;
       word-break: break-all;
+      color: var(--reportonly);
     }
 
     .empty {
       font-style: italic;
-      color: var(--text-secondary);
+      color: var(--text-muted);
       font-size: 0.85rem;
     }
 
@@ -668,280 +663,758 @@ function Get-HtmlTemplate {
       align-items: center;
       margin-top: 1rem;
       padding-top: 1rem;
-      border-top: 1px solid var(--border-color);
-      font-size: 0.8rem;
-      color: var(--text-secondary);
+      border-top: 1px solid var(--border);
+    }
+
+    .modified-date {
+      font-size: 0.75rem;
+      color: var(--text-muted);
     }
 
     .copy-btn {
-      padding: 0.4rem 0.8rem;
-      background: var(--primary-color);
-      color: white;
-      border: none;
+      padding: 0.3rem 0.6rem;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
       border-radius: 4px;
+      color: var(--text-secondary);
+      font-size: 0.75rem;
       cursor: pointer;
-      font-size: 0.8rem;
-      transition: background 0.2s;
+      transition: all 0.15s;
     }
 
     .copy-btn:hover {
-      background: #005a9e;
+      background: var(--accent);
+      color: white;
+      border-color: var(--accent);
     }
 
-    .no-results {
+    /* Coverage Matrix */
+    .matrix-container {
+      overflow-x: auto;
+      background: var(--bg-card);
+      border-radius: 8px;
+      padding: 1rem;
+    }
+
+    .matrix-table {
+      border-collapse: collapse;
+      min-width: 100%;
+      font-size: 0.8rem;
+    }
+
+    .matrix-table th,
+    .matrix-table td {
+      border: 1px solid var(--border);
+      padding: 0.5rem;
+      text-align: left;
+      vertical-align: top;
+      min-width: 120px;
+    }
+
+    .matrix-table th {
+      background: var(--bg-secondary);
+      font-weight: 600;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    .matrix-table th:first-child {
+      position: sticky;
+      left: 0;
+      z-index: 20;
+    }
+
+    .matrix-table td:first-child {
+      background: var(--bg-secondary);
+      font-weight: 500;
+      position: sticky;
+      left: 0;
+      z-index: 5;
+    }
+
+    .matrix-cell {
+      min-height: 40px;
+    }
+
+    .matrix-cell.gap {
+      background: rgba(220, 38, 38, 0.15);
+    }
+
+    .matrix-cell.covered {
+      background: rgba(16, 124, 16, 0.1);
+    }
+
+    .policy-chip {
+      display: inline-block;
+      background: var(--accent);
+      color: white;
+      padding: 0.15rem 0.4rem;
+      border-radius: 3px;
+      font-size: 0.7rem;
+      margin: 0.1rem;
+      cursor: pointer;
+      max-width: 100px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .policy-chip:hover {
+      background: var(--accent-dim);
+    }
+
+    .policy-chip.enabled { background: var(--enabled); }
+    .policy-chip.disabled { background: var(--disabled); opacity: 0.6; }
+    .policy-chip.reportonly { background: var(--reportonly); color: #1a1a1a; }
+
+    /* Matrix Popover */
+    .matrix-popover {
+      display: none;
+      position: fixed;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      max-width: 400px;
+      max-height: 300px;
+      overflow-y: auto;
+      z-index: 1000;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+    }
+
+    .matrix-popover.visible { display: block; }
+
+    .matrix-popover h4 {
+      font-size: 0.9rem;
+      margin-bottom: 0.75rem;
+      color: var(--accent);
+    }
+
+    .matrix-popover-close {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.5rem;
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 1.25rem;
+    }
+
+    /* Overlap Analyzer */
+    .analysis-container {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .analysis-summary {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .analysis-stat {
+      background: var(--bg-card);
+      border-radius: 8px;
+      padding: 1rem 1.5rem;
       text-align: center;
-      padding: 3rem;
+      min-width: 150px;
+    }
+
+    .analysis-stat .count {
+      font-size: 2rem;
+      font-weight: 700;
+      color: var(--accent);
+    }
+
+    .analysis-stat .label {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      margin-top: 0.25rem;
+    }
+
+    .analysis-stat.conflicts .count { color: var(--disabled); }
+    .analysis-stat.overlaps .count { color: var(--reportonly); }
+
+    .finding-card {
+      background: var(--bg-card);
+      border-radius: 8px;
+      padding: 1.25rem;
+      border-left: 4px solid var(--overlap);
+    }
+
+    .finding-card.conflict { border-left-color: var(--disabled); }
+
+    .finding-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 1rem;
+    }
+
+    .finding-type {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      padding: 0.2rem 0.5rem;
+      border-radius: 3px;
+      background: var(--overlap);
+      color: #1a1a1a;
+    }
+
+    .finding-card.conflict .finding-type {
+      background: var(--disabled);
+      color: white;
+    }
+
+    .finding-explanation {
+      font-size: 0.9rem;
       color: var(--text-secondary);
+      margin-bottom: 1rem;
+      padding: 0.75rem;
+      background: var(--bg-secondary);
+      border-radius: 6px;
     }
 
-    .no-results h3 {
-      margin-bottom: 0.5rem;
-    }
-
-    footer {
-      text-align: center;
-      padding: 2rem;
-      color: var(--text-secondary);
-      font-size: 0.85rem;
-    }
-
-    @media print {
-      header {
-        position: relative;
-        background: var(--primary-color) !important;
-        -webkit-print-color-adjust: exact;
-        print-color-adjust: exact;
-      }
-
-      .controls {
-        display: none;
-      }
-
-      .policy-card {
-        break-inside: avoid;
-        page-break-inside: avoid;
-      }
-
-      .policy-content {
-        display: block !important;
-      }
-
-      .expand-icon, .copy-btn {
-        display: none;
-      }
+    .finding-policies {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
     }
 
     @media (max-width: 768px) {
-      header {
-        padding: 1rem;
-      }
-
-      header h1 {
-        font-size: 1.4rem;
-      }
-
-      .controls {
-        flex-direction: column;
-      }
-
-      .controls input[type="search"],
-      .controls select {
-        width: 100%;
-      }
-
-      main {
-        padding: 1rem;
-      }
-
-      .policy-grid {
-        grid-template-columns: 1fr;
-      }
+      .finding-policies { grid-template-columns: 1fr; }
     }
+
+    .finding-policy {
+      background: var(--bg-secondary);
+      border-radius: 6px;
+      padding: 1rem;
+    }
+
+    .finding-policy h5 {
+      font-size: 0.9rem;
+      margin-bottom: 0.5rem;
+      color: var(--text-primary);
+    }
+
+    .finding-policy .detail {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      margin: 0.25rem 0;
+    }
+
+    .finding-policy .detail strong {
+      color: var(--text-primary);
+    }
+
+    .no-findings {
+      text-align: center;
+      padding: 3rem;
+      color: var(--text-muted);
+    }
+
+    .no-findings svg {
+      width: 64px;
+      height: 64px;
+      margin-bottom: 1rem;
+      opacity: 0.5;
+    }
+
+    /* Footer */
+    footer {
+      text-align: center;
+      padding: 2rem;
+      color: var(--text-muted);
+      font-size: 0.8rem;
+      border-top: 1px solid var(--border);
+      margin-top: 2rem;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: var(--bg-secondary); }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
   </style>
 </head>
 <body>
-  <header>
-    <h1>$Title</h1>
-    <div class="controls">
-      <input type="search" id="search" placeholder="Search policies..." oninput="filterPolicies()">
-      <select id="stateFilter" onchange="filterPolicies()">
-        <option value="all">All States</option>
-        <option value="enabled">Enabled</option>
-        <option value="disabled">Disabled</option>
-        <option value="enabledForReportingButNotEnforced">Report-Only</option>
-      </select>
-      <select id="sortBy" onchange="sortPolicies()">
-        <option value="name">Sort by Name</option>
-        <option value="state">Sort by State</option>
-      </select>
-      <button onclick="toggleTheme()">Toggle Theme</button>
-      <button onclick="expandAll()">Expand All</button>
-      <button onclick="collapseAll()">Collapse All</button>
-      <button onclick="exportJson()">Export JSON</button>
+  <nav class="top-nav">
+    <span class="nav-brand">CA Policy Analyzer</span>
+    <div class="nav-tabs">
+      <div class="nav-tab active" data-view="cards">Policy Cards</div>
+      <div class="nav-tab" data-view="matrix">Coverage Matrix</div>
+      <div class="nav-tab" data-view="analyzer">Overlap Analyzer</div>
     </div>
-    <div class="summary">
-      <div class="summary-item">
-        <span class="dot dot-total"></span>
-        <span class="summary-count">$($Stats.Total)</span>
-        <span class="summary-label">Total</span>
+    <div class="nav-stats">
+      <div class="stat-item">
+        <span class="stat-dot total"></span>
+        <span class="stat-count">$($Stats.Total)</span>
+        <span class="stat-label">Total</span>
       </div>
-      <div class="summary-item">
-        <span class="dot dot-enabled"></span>
-        <span class="summary-count">$($Stats.Enabled)</span>
-        <span class="summary-label">Enabled</span>
+      <div class="stat-item">
+        <span class="stat-dot enabled"></span>
+        <span class="stat-count">$($Stats.Enabled)</span>
+        <span class="stat-label">Enabled</span>
       </div>
-      <div class="summary-item">
-        <span class="dot dot-reportonly"></span>
-        <span class="summary-count">$($Stats.ReportOnly)</span>
-        <span class="summary-label">Report-Only</span>
+      <div class="stat-item">
+        <span class="stat-dot reportonly"></span>
+        <span class="stat-count">$($Stats.ReportOnly)</span>
+        <span class="stat-label">Report-Only</span>
       </div>
-      <div class="summary-item">
-        <span class="dot dot-disabled"></span>
-        <span class="summary-count">$($Stats.Disabled)</span>
-        <span class="summary-label">Disabled</span>
+      <div class="stat-item">
+        <span class="stat-dot disabled"></span>
+        <span class="stat-count">$($Stats.Disabled)</span>
+        <span class="stat-label">Disabled</span>
       </div>
     </div>
-  </header>
+  </nav>
 
-  <main id="policies-container">
+  <main>
+    <!-- View 1: Policy Cards -->
+    <div id="view-cards" class="view active">
+      <div class="view-header">
+        <h2 class="view-title">Policy Cards</h2>
+        <div class="view-controls">
+          <input type="search" class="search-input" id="card-search" placeholder="Search policies...">
+          <select class="filter-select" id="state-filter">
+            <option value="all">All States</option>
+            <option value="enabled">Enabled</option>
+            <option value="enabledForReportingButNotEnforced">Report-Only</option>
+            <option value="disabled">Disabled</option>
+          </select>
+          <button class="btn btn-secondary" onclick="expandAllCards()">Expand All</button>
+          <button class="btn btn-secondary" onclick="collapseAllCards()">Collapse All</button>
+        </div>
+      </div>
+      <div class="cards-container" id="cards-container">
 $PoliciesHtml
+      </div>
+    </div>
+
+    <!-- View 2: Coverage Matrix -->
+    <div id="view-matrix" class="view">
+      <div class="view-header">
+        <h2 class="view-title">Coverage Matrix</h2>
+        <div class="view-controls">
+          <label style="font-size: 0.85rem; color: var(--text-secondary);">
+            <input type="checkbox" id="hide-disabled-matrix" checked> Hide disabled policies
+          </label>
+        </div>
+      </div>
+      <div class="matrix-container" id="matrix-container">
+        <p style="color: var(--text-muted);">Loading matrix...</p>
+      </div>
+    </div>
+
+    <!-- View 3: Overlap Analyzer -->
+    <div id="view-analyzer" class="view">
+      <div class="view-header">
+        <h2 class="view-title">Overlap & Conflict Analyzer</h2>
+        <div class="view-controls">
+          <button class="btn" onclick="runAnalysis()">Re-analyze</button>
+        </div>
+      </div>
+      <div class="analysis-container" id="analysis-container">
+        <p style="color: var(--text-muted);">Analyzing policies...</p>
+      </div>
+    </div>
   </main>
 
+  <div class="matrix-popover" id="matrix-popover">
+    <button class="matrix-popover-close" onclick="hidePopover()">&times;</button>
+    <h4 id="popover-title">Policies</h4>
+    <div id="popover-content"></div>
+  </div>
+
   <footer>
-    <p>Generated on $date</p>
-    <p>Conditional Access Policy Documenter</p>
+    Generated on $date | Conditional Access Policy Analyzer
   </footer>
 
   <script>
-    // Store policies data for filtering/export
     const policiesData = $PoliciesJson;
 
+    // Navigation
+    document.querySelectorAll('.nav-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+        tab.classList.add('active');
+        document.getElementById('view-' + tab.dataset.view).classList.add('active');
+
+        if (tab.dataset.view === 'matrix') buildMatrix();
+        if (tab.dataset.view === 'analyzer') runAnalysis();
+      });
+    });
+
+    // Card functions
     function toggleCard(header) {
-      const card = header.parentElement;
-      card.classList.toggle('expanded');
+      header.parentElement.classList.toggle('expanded');
     }
 
-    function filterPolicies() {
-      const searchTerm = document.getElementById('search').value.toLowerCase();
-      const stateFilter = document.getElementById('stateFilter').value;
-      const cards = document.querySelectorAll('.policy-card');
-      let visibleCount = 0;
-
-      cards.forEach(card => {
-        const name = card.getAttribute('data-name').toLowerCase();
-        const state = card.getAttribute('data-state');
-        const content = card.textContent.toLowerCase();
-
-        const matchesSearch = name.includes(searchTerm) || content.includes(searchTerm);
-        const matchesState = stateFilter === 'all' || state === stateFilter;
-
-        if (matchesSearch && matchesState) {
-          card.style.display = 'block';
-          visibleCount++;
-        } else {
-          card.style.display = 'none';
-        }
-      });
-
-      // Show/hide no results message
-      let noResults = document.getElementById('no-results');
-      if (visibleCount === 0) {
-        if (!noResults) {
-          noResults = document.createElement('div');
-          noResults.id = 'no-results';
-          noResults.className = 'no-results';
-          noResults.innerHTML = '<h3>No policies found</h3><p>Try adjusting your search or filter criteria.</p>';
-          document.getElementById('policies-container').appendChild(noResults);
-        }
-        noResults.style.display = 'block';
-      } else if (noResults) {
-        noResults.style.display = 'none';
-      }
-    }
-
-    function sortPolicies() {
-      const sortBy = document.getElementById('sortBy').value;
-      const container = document.getElementById('policies-container');
-      const cards = Array.from(container.querySelectorAll('.policy-card'));
-
-      cards.sort((a, b) => {
-        if (sortBy === 'name') {
-          return a.getAttribute('data-name').localeCompare(b.getAttribute('data-name'));
-        } else if (sortBy === 'state') {
-          const stateOrder = { 'enabled': 0, 'enabledForReportingButNotEnforced': 1, 'disabled': 2 };
-          return (stateOrder[a.getAttribute('data-state')] || 3) - (stateOrder[b.getAttribute('data-state')] || 3);
-        }
-        return 0;
-      });
-
-      cards.forEach(card => container.appendChild(card));
-    }
-
-    function toggleTheme() {
-      const body = document.body;
-      const currentTheme = body.getAttribute('data-theme');
-      body.setAttribute('data-theme', currentTheme === 'dark' ? 'light' : 'dark');
-      localStorage.setItem('theme', body.getAttribute('data-theme'));
-    }
-
-    function expandAll() {
-      document.querySelectorAll('.policy-card').forEach(card => {
-        if (card.style.display !== 'none') {
-          card.classList.add('expanded');
-        }
+    function expandAllCards() {
+      document.querySelectorAll('.policy-card').forEach(c => {
+        if (c.style.display !== 'none') c.classList.add('expanded');
       });
     }
 
-    function collapseAll() {
-      document.querySelectorAll('.policy-card').forEach(card => {
-        card.classList.remove('expanded');
-      });
+    function collapseAllCards() {
+      document.querySelectorAll('.policy-card').forEach(c => c.classList.remove('expanded'));
     }
 
     function copyPolicyId(id) {
-      navigator.clipboard.writeText(id).then(() => {
-        const btn = event.target;
-        const originalText = btn.textContent;
-        btn.textContent = 'Copied!';
-        setTimeout(() => { btn.textContent = originalText; }, 1500);
+      navigator.clipboard.writeText(id);
+      const btn = event.target;
+      const orig = btn.textContent;
+      btn.textContent = 'Copied!';
+      setTimeout(() => btn.textContent = orig, 1500);
+    }
+
+    // Card filtering
+    document.getElementById('card-search').addEventListener('input', filterCards);
+    document.getElementById('state-filter').addEventListener('change', filterCards);
+
+    function filterCards() {
+      const search = document.getElementById('card-search').value.toLowerCase();
+      const state = document.getElementById('state-filter').value;
+
+      document.querySelectorAll('.policy-card').forEach(card => {
+        const name = card.dataset.name.toLowerCase();
+        const cardState = card.dataset.state;
+        const content = card.textContent.toLowerCase();
+
+        const matchSearch = !search || name.includes(search) || content.includes(search);
+        const matchState = state === 'all' || cardState === state;
+
+        card.style.display = matchSearch && matchState ? 'block' : 'none';
       });
     }
 
-    function exportJson() {
-      const stateFilter = document.getElementById('stateFilter').value;
-      const searchTerm = document.getElementById('search').value.toLowerCase();
+    // Coverage Matrix
+    function buildMatrix() {
+      const hideDisabled = document.getElementById('hide-disabled-matrix').checked;
+      const policies = hideDisabled
+        ? policiesData.filter(p => p.StateRaw !== 'disabled')
+        : policiesData;
 
-      let filteredData = policiesData;
+      // Extract unique user populations
+      const userPops = new Set(['All Users']);
+      const apps = new Set(['All cloud apps']);
 
-      if (stateFilter !== 'all') {
-        filteredData = filteredData.filter(p => p.StateRaw === stateFilter);
-      }
+      policies.forEach(p => {
+        const c = p.Conditions || {};
+        const u = c.Users || {};
+        const a = c.Applications || {};
 
-      if (searchTerm) {
-        filteredData = filteredData.filter(p =>
-          p.DisplayName.toLowerCase().includes(searchTerm) ||
-          JSON.stringify(p).toLowerCase().includes(searchTerm)
-        );
-      }
+        (u.IncludeUsers || []).forEach(x => { if (x !== 'All') userPops.add(x); });
+        (u.IncludeGroups || []).forEach(x => userPops.add(x));
+        (u.IncludeRoles || []).forEach(x => userPops.add(x));
+        (a.IncludeApplications || []).forEach(x => { if (x !== 'All') apps.add(x); });
+      });
 
-      const blob = new Blob([JSON.stringify(filteredData, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'conditional-access-policies.json';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      const userList = Array.from(userPops).sort();
+      const appList = Array.from(apps).sort();
+
+      // Build coverage map
+      const coverage = {};
+      userList.forEach(u => {
+        coverage[u] = {};
+        appList.forEach(a => coverage[u][a] = []);
+      });
+
+      policies.forEach(p => {
+        const c = p.Conditions || {};
+        const u = c.Users || {};
+        const a = c.Applications || {};
+
+        const targetUsers = new Set();
+        if ((u.IncludeUsers || []).includes('All')) {
+          userList.forEach(x => targetUsers.add(x));
+        } else {
+          (u.IncludeUsers || []).forEach(x => targetUsers.add(x));
+          (u.IncludeGroups || []).forEach(x => targetUsers.add(x));
+          (u.IncludeRoles || []).forEach(x => targetUsers.add(x));
+        }
+
+        const targetApps = new Set();
+        if ((a.IncludeApplications || []).includes('All')) {
+          appList.forEach(x => targetApps.add(x));
+        } else {
+          (a.IncludeApplications || []).forEach(x => targetApps.add(x));
+        }
+
+        targetUsers.forEach(user => {
+          targetApps.forEach(app => {
+            if (coverage[user] && coverage[user][app] !== undefined) {
+              coverage[user][app].push(p);
+            }
+          });
+        });
+      });
+
+      // Render table
+      let html = '<table class="matrix-table"><thead><tr><th>User / App</th>';
+      appList.forEach(app => {
+        const shortApp = app.length > 20 ? app.substring(0, 18) + '...' : app;
+        html += '<th title="' + escapeHtml(app) + '">' + escapeHtml(shortApp) + '</th>';
+      });
+      html += '</tr></thead><tbody>';
+
+      userList.forEach(user => {
+        const shortUser = user.length > 25 ? user.substring(0, 23) + '...' : user;
+        html += '<tr><td title="' + escapeHtml(user) + '">' + escapeHtml(shortUser) + '</td>';
+        appList.forEach(app => {
+          const pols = coverage[user][app];
+          const cellClass = pols.length === 0 ? 'gap' : 'covered';
+          html += '<td class="matrix-cell ' + cellClass + '" onclick="showPopover(event, \'' +
+            escapeHtml(user) + '\', \'' + escapeHtml(app) + '\')">';
+          pols.slice(0, 3).forEach(pol => {
+            const stateClass = pol.StateRaw === 'enabled' ? 'enabled' :
+              (pol.StateRaw === 'disabled' ? 'disabled' : 'reportonly');
+            const shortName = pol.DisplayName.length > 12 ?
+              pol.DisplayName.substring(0, 10) + '...' : pol.DisplayName;
+            html += '<span class="policy-chip ' + stateClass + '" title="' +
+              escapeHtml(pol.DisplayName) + '">' + escapeHtml(shortName) + '</span>';
+          });
+          if (pols.length > 3) {
+            html += '<span class="policy-chip">+' + (pols.length - 3) + '</span>';
+          }
+          html += '</td>';
+        });
+        html += '</tr>';
+      });
+
+      html += '</tbody></table>';
+      document.getElementById('matrix-container').innerHTML = html;
     }
 
-    // Initialize theme from localStorage
-    (function() {
-      const savedTheme = localStorage.getItem('theme');
-      if (savedTheme) {
-        document.body.setAttribute('data-theme', savedTheme);
+    document.getElementById('hide-disabled-matrix').addEventListener('change', buildMatrix);
+
+    // Matrix Popover
+    let currentPopoverData = null;
+
+    function showPopover(event, user, app) {
+      const hideDisabled = document.getElementById('hide-disabled-matrix').checked;
+      const policies = hideDisabled
+        ? policiesData.filter(p => p.StateRaw !== 'disabled')
+        : policiesData;
+
+      const matching = policies.filter(p => {
+        const c = p.Conditions || {};
+        const u = c.Users || {};
+        const a = c.Applications || {};
+
+        let matchUser = (u.IncludeUsers || []).includes('All') ||
+          (u.IncludeUsers || []).includes(user) ||
+          (u.IncludeGroups || []).includes(user) ||
+          (u.IncludeRoles || []).includes(user);
+
+        let matchApp = (a.IncludeApplications || []).includes('All') ||
+          (a.IncludeApplications || []).includes(app);
+
+        return matchUser && matchApp;
+      });
+
+      const popover = document.getElementById('matrix-popover');
+      document.getElementById('popover-title').textContent = user + ' + ' + app;
+
+      let content = '';
+      if (matching.length === 0) {
+        content = '<p style="color: var(--disabled);">No coverage - potential gap!</p>';
+      } else {
+        matching.forEach(p => {
+          const gc = p.GrantControls || {};
+          const controls = (gc.BuiltInControls || []).join(', ') || 'None';
+          content += '<div style="margin-bottom: 0.75rem; padding: 0.5rem; background: var(--bg-secondary); border-radius: 4px;">';
+          content += '<strong>' + escapeHtml(p.DisplayName) + '</strong>';
+          content += '<div style="font-size: 0.8rem; color: var(--text-secondary);">';
+          content += 'State: ' + p.State + '<br>';
+          content += 'Controls: ' + escapeHtml(controls);
+          content += '</div></div>';
+        });
       }
-    })();
+
+      document.getElementById('popover-content').innerHTML = content;
+
+      const rect = event.target.getBoundingClientRect();
+      popover.style.left = Math.min(rect.left, window.innerWidth - 420) + 'px';
+      popover.style.top = Math.min(rect.bottom + 5, window.innerHeight - 320) + 'px';
+      popover.classList.add('visible');
+    }
+
+    function hidePopover() {
+      document.getElementById('matrix-popover').classList.remove('visible');
+    }
+
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.matrix-cell') && !e.target.closest('.matrix-popover')) {
+        hidePopover();
+      }
+    });
+
+    // Overlap Analyzer
+    function runAnalysis() {
+      const activePolicies = policiesData.filter(p => p.StateRaw !== 'disabled');
+      const findings = [];
+
+      // Compare each pair of policies
+      for (let i = 0; i < activePolicies.length; i++) {
+        for (let j = i + 1; j < activePolicies.length; j++) {
+          const p1 = activePolicies[i];
+          const p2 = activePolicies[j];
+
+          const overlap = checkOverlap(p1, p2);
+          if (overlap.hasOverlap) {
+            findings.push({
+              type: overlap.isConflict ? 'conflict' : 'overlap',
+              policy1: p1,
+              policy2: p2,
+              explanation: overlap.explanation
+            });
+          }
+        }
+      }
+
+      const conflicts = findings.filter(f => f.type === 'conflict').length;
+      const overlaps = findings.filter(f => f.type === 'overlap').length;
+
+      let html = '<div class="analysis-summary">';
+      html += '<div class="analysis-stat"><div class="count">' + activePolicies.length + '</div><div class="label">Active Policies</div></div>';
+      html += '<div class="analysis-stat conflicts"><div class="count">' + conflicts + '</div><div class="label">Potential Conflicts</div></div>';
+      html += '<div class="analysis-stat overlaps"><div class="count">' + overlaps + '</div><div class="label">Overlapping Scopes</div></div>';
+      html += '</div>';
+
+      if (findings.length === 0) {
+        html += '<div class="no-findings">';
+        html += '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>';
+        html += '<h3>No conflicts or overlaps detected</h3>';
+        html += '<p>All active policies have distinct scopes or consistent controls.</p>';
+        html += '</div>';
+      } else {
+        findings.forEach(f => {
+          const cardClass = f.type === 'conflict' ? 'conflict' : '';
+          html += '<div class="finding-card ' + cardClass + '">';
+          html += '<div class="finding-header">';
+          html += '<span class="finding-type">' + (f.type === 'conflict' ? 'Potential Conflict' : 'Scope Overlap') + '</span>';
+          html += '</div>';
+          html += '<div class="finding-explanation">' + escapeHtml(f.explanation) + '</div>';
+          html += '<div class="finding-policies">';
+
+          [f.policy1, f.policy2].forEach(p => {
+            const gc = p.GrantControls || {};
+            const controls = (gc.BuiltInControls || []).join(', ') || 'None';
+            const users = summarizeUsers(p);
+            const apps = summarizeApps(p);
+
+            html += '<div class="finding-policy">';
+            html += '<h5>' + escapeHtml(p.DisplayName) + '</h5>';
+            html += '<div class="detail"><strong>State:</strong> ' + p.State + '</div>';
+            html += '<div class="detail"><strong>Users:</strong> ' + escapeHtml(users) + '</div>';
+            html += '<div class="detail"><strong>Apps:</strong> ' + escapeHtml(apps) + '</div>';
+            html += '<div class="detail"><strong>Controls:</strong> ' + escapeHtml(controls) + '</div>';
+            html += '</div>';
+          });
+
+          html += '</div></div>';
+        });
+      }
+
+      document.getElementById('analysis-container').innerHTML = html;
+    }
+
+    function checkOverlap(p1, p2) {
+      const u1 = p1.Conditions?.Users || {};
+      const u2 = p2.Conditions?.Users || {};
+      const a1 = p1.Conditions?.Applications || {};
+      const a2 = p2.Conditions?.Applications || {};
+
+      // Check user overlap
+      const users1 = new Set([
+        ...(u1.IncludeUsers || []),
+        ...(u1.IncludeGroups || []),
+        ...(u1.IncludeRoles || [])
+      ]);
+      const users2 = new Set([
+        ...(u2.IncludeUsers || []),
+        ...(u2.IncludeGroups || []),
+        ...(u2.IncludeRoles || [])
+      ]);
+
+      const userOverlap = users1.has('All') || users2.has('All') ||
+        [...users1].some(u => users2.has(u));
+
+      // Check app overlap
+      const apps1 = new Set(a1.IncludeApplications || []);
+      const apps2 = new Set(a2.IncludeApplications || []);
+
+      const appOverlap = apps1.has('All') || apps2.has('All') ||
+        [...apps1].some(a => apps2.has(a));
+
+      if (!userOverlap || !appOverlap) {
+        return { hasOverlap: false };
+      }
+
+      // Check for conflict (different controls)
+      const gc1 = p1.GrantControls || {};
+      const gc2 = p2.GrantControls || {};
+      const controls1 = (gc1.BuiltInControls || []).sort().join(',');
+      const controls2 = (gc2.BuiltInControls || []).sort().join(',');
+
+      const isConflict = controls1 !== controls2 && controls1 && controls2;
+
+      let explanation = '';
+      if (isConflict) {
+        explanation = 'These policies target overlapping users and applications but require different grant controls. ';
+        explanation += 'Policy "' + p1.DisplayName + '" requires [' + (gc1.BuiltInControls || []).join(', ') + '] ';
+        explanation += 'while "' + p2.DisplayName + '" requires [' + (gc2.BuiltInControls || []).join(', ') + '].';
+      } else {
+        // Check if one is subset of other
+        const isSubset = (users1.has('All') || isSubsetOf(users2, users1)) &&
+                        (apps1.has('All') || isSubsetOf(apps2, apps1));
+        const isSuperset = (users2.has('All') || isSubsetOf(users1, users2)) &&
+                          (apps2.has('All') || isSubsetOf(apps1, apps2));
+
+        if (isSubset && !isSuperset) {
+          explanation = '"' + p2.DisplayName + '" targets a subset of users/apps covered by "' + p1.DisplayName + '". Consider if the more specific policy is necessary.';
+        } else if (isSuperset && !isSubset) {
+          explanation = '"' + p1.DisplayName + '" targets a subset of users/apps covered by "' + p2.DisplayName + '". Consider if the more specific policy is necessary.';
+        } else {
+          explanation = 'These policies have overlapping scope (some users and apps are targeted by both). They apply the same controls, so this may be intentional redundancy.';
+        }
+      }
+
+      return { hasOverlap: true, isConflict, explanation };
+    }
+
+    function isSubsetOf(setA, setB) {
+      return [...setA].every(item => setB.has(item));
+    }
+
+    function summarizeUsers(p) {
+      const u = p.Conditions?.Users || {};
+      const parts = [];
+      if ((u.IncludeUsers || []).includes('All')) return 'All Users';
+      if ((u.IncludeUsers || []).length) parts.push(u.IncludeUsers.length + ' users');
+      if ((u.IncludeGroups || []).length) parts.push(u.IncludeGroups.length + ' groups');
+      if ((u.IncludeRoles || []).length) parts.push(u.IncludeRoles.length + ' roles');
+      return parts.join(', ') || 'None specified';
+    }
+
+    function summarizeApps(p) {
+      const a = p.Conditions?.Applications || {};
+      if ((a.IncludeApplications || []).includes('All')) return 'All cloud apps';
+      const count = (a.IncludeApplications || []).length;
+      return count ? count + ' apps' : 'None specified';
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
   </script>
 </body>
 </html>
@@ -949,10 +1422,6 @@ $PoliciesHtml
 }
 
 function Set-HtmlTheme {
-    <#
-    .SYNOPSIS
-        Sets the color theme for generated HTML reports
-    #>
     [CmdletBinding()]
     param(
         [string]$PrimaryColor,
@@ -967,7 +1436,6 @@ function Set-HtmlTheme {
     if ($ReportOnlyColor) { $script:HtmlTheme.ReportOnlyColor = $ReportOnlyColor }
 }
 
-# Export functions
 Export-ModuleMember -Function @(
     'New-HtmlReport',
     'Set-HtmlTheme'
