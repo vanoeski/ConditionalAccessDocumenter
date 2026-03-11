@@ -57,6 +57,16 @@ param(
     [string]$TenantId = "common",
 
     [Parameter(Mandatory = $false)]
+    [string]$ClientId,
+
+    [Parameter(Mandatory = $false)]
+    [string]$ClientSecret,
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet("ClientCredentials", "DeviceCode")]
+    [string]$AuthMethod,
+
+    [Parameter(Mandatory = $false)]
     [string]$OutputPath = ".\Output",
 
     [Parameter(Mandatory = $false)]
@@ -161,7 +171,13 @@ Write-Host ""
 Write-Host "Connecting to Microsoft Graph..." -ForegroundColor Cyan
 Write-Host ""
 
-$connected = Connect-Graph -TenantId $TenantId
+# Build auth params — only pass values that were explicitly supplied
+$authParams = @{ TenantId = $TenantId }
+if ($ClientId)     { $authParams.ClientId     = $ClientId }
+if ($ClientSecret) { $authParams.ClientSecret = $ClientSecret }
+if ($AuthMethod)   { $authParams.AuthMethod   = $AuthMethod }
+
+$connected = Connect-Graph @authParams
 
 if (-not $connected) {
     Write-Error "Failed to authenticate to Microsoft Graph. Please try again."

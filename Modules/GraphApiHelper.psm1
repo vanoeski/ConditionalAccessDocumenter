@@ -199,13 +199,38 @@ function Get-WellKnownRoles {
 function Connect-Graph {
     <#
     .SYNOPSIS
-        Authenticates to Microsoft Graph using device code flow
+        Authenticates to Microsoft Graph.
+
+    .DESCRIPTION
+        Supports two authentication methods:
+          - ClientCredentials (default when -ClientSecret is provided): OAuth 2.0
+            client credentials flow. Authenticates as a service principal with no
+            user interaction required. Requires Application permissions with admin consent.
+          - DeviceCode: Interactive browser-based login. Requires Delegated permissions.
 
     .PARAMETER TenantId
-        The tenant ID or domain name (e.g., contoso.onmicrosoft.com)
+        Required for ClientCredentials. The tenant ID or domain (e.g., contoso.onmicrosoft.com).
 
     .PARAMETER ClientId
-        Optional client ID for a custom app registration. Defaults to Microsoft Graph PowerShell
+        The app registration client ID (application ID).
+        Defaults to the Microsoft Graph PowerShell app for DeviceCode flow.
+
+    .PARAMETER ClientSecret
+        The client secret for the app registration.
+        Providing this parameter automatically selects ClientCredentials flow.
+
+    .PARAMETER AuthMethod
+        Explicitly set the auth method: 'ClientCredentials' or 'DeviceCode'.
+        If -ClientSecret is provided, defaults to ClientCredentials.
+        Otherwise defaults to DeviceCode.
+
+    .EXAMPLE
+        # Service principal (unattended)
+        Connect-Graph -TenantId "contoso.onmicrosoft.com" -ClientId "abc..." -ClientSecret "xyz..."
+
+    .EXAMPLE
+        # Interactive device code
+        Connect-Graph -TenantId "common"
     #>
     [CmdletBinding()]
     param(
@@ -213,68 +238,99 @@ function Connect-Graph {
         [string]$TenantId = "common",
 
         [Parameter(Mandatory = $false)]
-        [string]$ClientId = "14d82eec-204b-4c2f-b7e8-296a70dab67e" # Microsoft Graph PowerShell
+        [string]$ClientId = "14d82eec-204b-4c2f-b7e8-296a70dab67e",
+
+        [Parameter(Mandatory = $false)]
+        [string]$ClientSecret,
+
+        [Parameter(Mandatory = $false)]
+        [ValidateSet("ClientCredentials", "DeviceCode")]
+        [string]$AuthMethod
     )
 
     $script:TenantId = $TenantId
-    $scope = "https://graph.microsoft.com/.default offline_access"
 
-    # Device code flow
-    $deviceCodeUrl = "https://login.microsoftonline.com/$TenantId/oauth2/v2.0/devicecode"
+    # Auto-select method
+    if (-not $AuthMethod) {
+        $AuthMethod = if ($ClientSecret) { "ClientCredentials" } else { "DeviceCode" }
+    }
+
+    if ($AuthMethod -eq "ClientCredentials" -and -not $ClientSecret) {
+        Write-Error "ClientCredentials flow requires -ClientSecret."
+        return $false
+    }
+
+    if ($AuthMethod -eq "ClientCredentials" -and $TenantId -eq "common") {
+        Write-Error "ClientCredentials flow requires an explicit -TenantId (not 'common')."
+        return $false
+    }
+
     $tokenUrl = "https://login.microsoftonline.com/$TenantId/oauth2/v2.0/token"
 
     try {
-        # Request device code
-        $deviceCodeBody = @{
-            client_id = $ClientId
-            scope     = $scope
-        }
+        if ($AuthMethod -eq "ClientCredentials") {
+            # Single POST — no polling needed
+            Write-Host "Authenticating as service principal..." -ForegroundColor Cyan
 
-        $deviceCodeResponse = Invoke-RestMethod -Uri $deviceCodeUrl -Method POST -Body $deviceCodeBody -ContentType "application/x-www-form-urlencoded"
-
-        Write-Host "`n$($deviceCodeResponse.message)" -ForegroundColor Yellow
-        Write-Host "`nWaiting for authentication..." -ForegroundColor Cyan
-
-        # Poll for token
-        $tokenBody = @{
-            grant_type  = "urn:ietf:params:oauth:grant-type:device_code"
-            client_id   = $ClientId
-            device_code = $deviceCodeResponse.device_code
-        }
-
-        $timeout = [DateTime]::Now.AddSeconds($deviceCodeResponse.expires_in)
-        $interval = $deviceCodeResponse.interval
-
-        while ([DateTime]::Now -lt $timeout) {
-            Start-Sleep -Seconds $interval
-
-            try {
-                $tokenResponse = Invoke-RestMethod -Uri $tokenUrl -Method POST -Body $tokenBody -ContentType "application/x-www-form-urlencoded"
-
-                $script:GraphToken = $tokenResponse.access_token
-                $script:TokenExpiry = [DateTime]::Now.AddSeconds($tokenResponse.expires_in - 300) # 5 min buffer
-
-                Write-Host "Successfully authenticated to Microsoft Graph!" -ForegroundColor Green
-                return $true
+            $tokenBody = @{
+                grant_type    = "client_credentials"
+                client_id     = $ClientId
+                client_secret = $ClientSecret
+                scope         = "https://graph.microsoft.com/.default"
             }
-            catch {
-                $errorResponse = $_.ErrorDetails.Message | ConvertFrom-Json -ErrorAction SilentlyContinue
-                if ($errorResponse.error -eq "authorization_pending") {
-                    continue
+
+            $tokenResponse = Invoke-RestMethod -Uri $tokenUrl -Method POST -Body $tokenBody `
+                -ContentType "application/x-www-form-urlencoded"
+
+            $script:GraphToken  = $tokenResponse.access_token
+            $script:TokenExpiry = [DateTime]::Now.AddSeconds($tokenResponse.expires_in - 300)
+
+            Write-Host "Successfully authenticated to Microsoft Graph (service principal)!" -ForegroundColor Green
+            return $true
+        }
+        else {
+            # Device code flow (interactive)
+            $deviceCodeUrl = "https://login.microsoftonline.com/$TenantId/oauth2/v2.0/devicecode"
+
+            $deviceCodeResponse = Invoke-RestMethod -Uri $deviceCodeUrl -Method POST -Body @{
+                client_id = $ClientId
+                scope     = "https://graph.microsoft.com/.default offline_access"
+            } -ContentType "application/x-www-form-urlencoded"
+
+            Write-Host "`n$($deviceCodeResponse.message)" -ForegroundColor Yellow
+            Write-Host "`nWaiting for authentication..." -ForegroundColor Cyan
+
+            $tokenBody = @{
+                grant_type  = "urn:ietf:params:oauth:grant-type:device_code"
+                client_id   = $ClientId
+                device_code = $deviceCodeResponse.device_code
+            }
+
+            $timeout  = [DateTime]::Now.AddSeconds($deviceCodeResponse.expires_in)
+            $interval = $deviceCodeResponse.interval
+
+            while ([DateTime]::Now -lt $timeout) {
+                Start-Sleep -Seconds $interval
+                try {
+                    $tokenResponse = Invoke-RestMethod -Uri $tokenUrl -Method POST -Body $tokenBody `
+                        -ContentType "application/x-www-form-urlencoded"
+
+                    $script:GraphToken  = $tokenResponse.access_token
+                    $script:TokenExpiry = [DateTime]::Now.AddSeconds($tokenResponse.expires_in - 300)
+
+                    Write-Host "Successfully authenticated to Microsoft Graph!" -ForegroundColor Green
+                    return $true
                 }
-                elseif ($errorResponse.error -eq "authorization_declined") {
-                    throw "Authentication was declined by the user."
-                }
-                elseif ($errorResponse.error -eq "expired_token") {
-                    throw "Device code expired. Please try again."
-                }
-                else {
-                    throw $_
+                catch {
+                    $errorResponse = $_.ErrorDetails.Message | ConvertFrom-Json -ErrorAction SilentlyContinue
+                    if ($errorResponse.error -eq "authorization_pending") { continue }
+                    elseif ($errorResponse.error -eq "authorization_declined") { throw "Authentication declined." }
+                    elseif ($errorResponse.error -eq "expired_token")        { throw "Device code expired." }
+                    else { throw $_ }
                 }
             }
+            throw "Authentication timed out."
         }
-
-        throw "Authentication timed out."
     }
     catch {
         Write-Error "Failed to authenticate: $_"
