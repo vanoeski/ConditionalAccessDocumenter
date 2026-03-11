@@ -44,7 +44,7 @@ function New-HtmlReport {
 
     $policyCards = $Policies | ForEach-Object { ConvertTo-PolicyHtmlCard -Policy $_ }
     $policyCardsHtml = $policyCards -join "`n"
-    $policiesJson = $Policies | ConvertTo-Json -Depth 10 -Compress
+    $policiesJson = @($Policies) | ConvertTo-Json -Depth 10 -Compress
 
     $html = Get-HtmlTemplate -Title $Title -Stats $stats -PoliciesHtml $policyCardsHtml -PoliciesJson $policiesJson
     $html | Out-File -FilePath $Path -Encoding UTF8
@@ -1034,7 +1034,7 @@ $PoliciesHtml
   </footer>
 
   <script>
-    const policiesData = $PoliciesJson;
+    const policiesData = [].concat($PoliciesJson);
 
     // Navigation
     document.querySelectorAll('.nav-tab').forEach(tab => {
@@ -1092,6 +1092,9 @@ $PoliciesHtml
       });
     }
 
+    // Safe array helper — handles PS ConvertTo-Json unwrapping single items to scalars
+    function arr(x) { return x == null ? [] : [].concat(x); }
+
     // Coverage Matrix
     function buildMatrix() {
       const hideDisabled = document.getElementById('hide-disabled-matrix').checked;
@@ -1108,10 +1111,10 @@ $PoliciesHtml
         const u = c.Users || {};
         const a = c.Applications || {};
 
-        (u.IncludeUsers || []).forEach(x => { if (x !== 'All') userPops.add(x); });
-        (u.IncludeGroups || []).forEach(x => userPops.add(x));
-        (u.IncludeRoles || []).forEach(x => userPops.add(x));
-        (a.IncludeApplications || []).forEach(x => { if (x !== 'All') apps.add(x); });
+        arr(u.IncludeUsers).forEach(x => { if (x !== 'All') userPops.add(x); });
+        arr(u.IncludeGroups).forEach(x => userPops.add(x));
+        arr(u.IncludeRoles).forEach(x => userPops.add(x));
+        arr(a.IncludeApplications).forEach(x => { if (x !== 'All') apps.add(x); });
       });
 
       const userList = Array.from(userPops).sort();
@@ -1130,19 +1133,19 @@ $PoliciesHtml
         const a = c.Applications || {};
 
         const targetUsers = new Set();
-        if ((u.IncludeUsers || []).includes('All')) {
+        if (arr(u.IncludeUsers).includes('All')) {
           userList.forEach(x => targetUsers.add(x));
         } else {
-          (u.IncludeUsers || []).forEach(x => targetUsers.add(x));
-          (u.IncludeGroups || []).forEach(x => targetUsers.add(x));
-          (u.IncludeRoles || []).forEach(x => targetUsers.add(x));
+          arr(u.IncludeUsers).forEach(x => targetUsers.add(x));
+          arr(u.IncludeGroups).forEach(x => targetUsers.add(x));
+          arr(u.IncludeRoles).forEach(x => targetUsers.add(x));
         }
 
         const targetApps = new Set();
-        if ((a.IncludeApplications || []).includes('All')) {
+        if (arr(a.IncludeApplications).includes('All')) {
           appList.forEach(x => targetApps.add(x));
         } else {
-          (a.IncludeApplications || []).forEach(x => targetApps.add(x));
+          arr(a.IncludeApplications).forEach(x => targetApps.add(x));
         }
 
         targetUsers.forEach(user => {
@@ -1206,13 +1209,13 @@ $PoliciesHtml
         const u = c.Users || {};
         const a = c.Applications || {};
 
-        let matchUser = (u.IncludeUsers || []).includes('All') ||
-          (u.IncludeUsers || []).includes(user) ||
-          (u.IncludeGroups || []).includes(user) ||
-          (u.IncludeRoles || []).includes(user);
+        let matchUser = arr(u.IncludeUsers).includes('All') ||
+          arr(u.IncludeUsers).includes(user) ||
+          arr(u.IncludeGroups).includes(user) ||
+          arr(u.IncludeRoles).includes(user);
 
-        let matchApp = (a.IncludeApplications || []).includes('All') ||
-          (a.IncludeApplications || []).includes(app);
+        let matchApp = arr(a.IncludeApplications).includes('All') ||
+          arr(a.IncludeApplications).includes(app);
 
         return matchUser && matchApp;
       });
@@ -1226,7 +1229,7 @@ $PoliciesHtml
       } else {
         matching.forEach(p => {
           const gc = p.GrantControls || {};
-          const controls = (gc.BuiltInControls || []).join(', ') || 'None';
+          const controls = arr(gc.BuiltInControls).join(', ') || 'None';
           content += '<div style="margin-bottom: 0.75rem; padding: 0.5rem; background: var(--bg-secondary); border-radius: 4px;">';
           content += '<strong>' + escapeHtml(p.DisplayName) + '</strong>';
           content += '<div style="font-size: 0.8rem; color: var(--text-secondary);">';
@@ -1304,7 +1307,7 @@ $PoliciesHtml
 
           [f.policy1, f.policy2].forEach(p => {
             const gc = p.GrantControls || {};
-            const controls = (gc.BuiltInControls || []).join(', ') || 'None';
+            const controls = arr(gc.BuiltInControls).join(', ') || 'None';
             const users = summarizeUsers(p);
             const apps = summarizeApps(p);
 
@@ -1332,22 +1335,22 @@ $PoliciesHtml
 
       // Check user overlap
       const users1 = new Set([
-        ...(u1.IncludeUsers || []),
-        ...(u1.IncludeGroups || []),
-        ...(u1.IncludeRoles || [])
+        ...arr(u1.IncludeUsers),
+        ...arr(u1.IncludeGroups),
+        ...arr(u1.IncludeRoles)
       ]);
       const users2 = new Set([
-        ...(u2.IncludeUsers || []),
-        ...(u2.IncludeGroups || []),
-        ...(u2.IncludeRoles || [])
+        ...arr(u2.IncludeUsers),
+        ...arr(u2.IncludeGroups),
+        ...arr(u2.IncludeRoles)
       ]);
 
       const userOverlap = users1.has('All') || users2.has('All') ||
         [...users1].some(u => users2.has(u));
 
       // Check app overlap
-      const apps1 = new Set(a1.IncludeApplications || []);
-      const apps2 = new Set(a2.IncludeApplications || []);
+      const apps1 = new Set(arr(a1.IncludeApplications));
+      const apps2 = new Set(arr(a2.IncludeApplications));
 
       const appOverlap = apps1.has('All') || apps2.has('All') ||
         [...apps1].some(a => apps2.has(a));
@@ -1359,16 +1362,16 @@ $PoliciesHtml
       // Check for conflict (different controls)
       const gc1 = p1.GrantControls || {};
       const gc2 = p2.GrantControls || {};
-      const controls1 = (gc1.BuiltInControls || []).sort().join(',');
-      const controls2 = (gc2.BuiltInControls || []).sort().join(',');
+      const controls1 = arr(gc1.BuiltInControls).sort().join(',');
+      const controls2 = arr(gc2.BuiltInControls).sort().join(',');
 
       const isConflict = controls1 !== controls2 && controls1 && controls2;
 
       let explanation = '';
       if (isConflict) {
         explanation = 'These policies target overlapping users and applications but require different grant controls. ';
-        explanation += 'Policy "' + p1.DisplayName + '" requires [' + (gc1.BuiltInControls || []).join(', ') + '] ';
-        explanation += 'while "' + p2.DisplayName + '" requires [' + (gc2.BuiltInControls || []).join(', ') + '].';
+        explanation += 'Policy "' + p1.DisplayName + '" requires [' + arr(gc1.BuiltInControls).join(', ') + '] ';
+        explanation += 'while "' + p2.DisplayName + '" requires [' + arr(gc2.BuiltInControls).join(', ') + '].';
       } else {
         // Check if one is subset of other
         const isSubset = (users1.has('All') || isSubsetOf(users2, users1)) &&
@@ -1393,20 +1396,20 @@ $PoliciesHtml
     }
 
     function summarizeUsers(p) {
-      const u = p.Conditions?.Users || {};
+      const u = (p.Conditions || {}).Users || {};
       const parts = [];
-      if ((u.IncludeUsers || []).includes('All')) return 'All Users';
-      if ((u.IncludeUsers || []).length) parts.push(u.IncludeUsers.length + ' users');
-      if ((u.IncludeGroups || []).length) parts.push(u.IncludeGroups.length + ' groups');
-      if ((u.IncludeRoles || []).length) parts.push(u.IncludeRoles.length + ' roles');
+      if (arr(u.IncludeUsers).includes('All')) return 'All Users';
+      const iu = arr(u.IncludeUsers); if (iu.length) parts.push(iu.length + ' users');
+      const ig = arr(u.IncludeGroups); if (ig.length) parts.push(ig.length + ' groups');
+      const ir = arr(u.IncludeRoles);  if (ir.length) parts.push(ir.length + ' roles');
       return parts.join(', ') || 'None specified';
     }
 
     function summarizeApps(p) {
-      const a = p.Conditions?.Applications || {};
-      if ((a.IncludeApplications || []).includes('All')) return 'All cloud apps';
-      const count = (a.IncludeApplications || []).length;
-      return count ? count + ' apps' : 'None specified';
+      const a = (p.Conditions || {}).Applications || {};
+      const ia = arr(a.IncludeApplications);
+      if (ia.includes('All')) return 'All cloud apps';
+      return ia.length ? ia.length + ' apps' : 'None specified';
     }
 
     function escapeHtml(str) {
