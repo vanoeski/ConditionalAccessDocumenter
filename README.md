@@ -113,6 +113,29 @@ Both `{"value":[...]}` wrapper format and bare array format are supported.
 
 When using offline mode, GUIDs for custom (non-Microsoft) applications, groups, users, and named locations cannot be resolved without Graph API. Provide a mapping file to show friendly names instead of `[Unknown Application]` / `[Unknown Group]` placeholders.
 
+### Step 1 — Find which GUIDs need mapping
+
+Run offline without a mapping file first:
+
+```powershell
+.\Get-ConditionalAccessReport.ps1 -OfflineMode -PoliciesJsonPath ".\policies.json" -HtmlOnly
+```
+
+Open the HTML report and look for `[Unknown Application]`, `[Unknown Group]`, etc. These are the entries you need to map. The raw GUIDs for those entries are in your `policies.json` — search the file for the relevant section (e.g. `includeApplications`, `includeGroups`) to find them.
+
+### Step 2 — Look up the friendly names
+
+Find the GUID → name mapping in the Azure Portal:
+
+| Entity | Where to find the Object ID / App ID |
+|--------|--------------------------------------|
+| Applications | **Azure Portal** → Enterprise Applications → select app → **Application ID** (under Properties) |
+| Groups | **Azure Portal** → Groups → select group → **Object ID** (under Overview) |
+| Users | **Azure Portal** → Users → select user → **Object ID** (under Overview) |
+| Named Locations | **Azure Portal** → Conditional Access → Named Locations → select location → the GUID is in the browser URL |
+
+### Step 3 — Create your mapping file
+
 Copy `NameMapping.example.json` to `NameMapping.json` and fill in your GUIDs:
 
 ```json
@@ -132,7 +155,13 @@ Copy `NameMapping.example.json` to `NameMapping.json` and fill in your GUIDs:
 }
 ```
 
-`NameMapping.json` is excluded from git (see `.gitignore`). The example file is tracked as a template.
+Then re-run with `-NameMappingPath`:
+
+```powershell
+.\Get-ConditionalAccessReport.ps1 -OfflineMode -PoliciesJsonPath ".\policies.json" -NameMappingPath ".\NameMapping.json"
+```
+
+`NameMapping.json` is excluded from git (see `.gitignore`) since it contains tenant-specific identifiers. The example file is tracked as a template.
 
 **Name resolution priority in offline mode:**
 1. Built-in well-known Microsoft apps and roles (~120 entries, always available)
