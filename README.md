@@ -113,30 +113,33 @@ Both `{"value":[...]}` wrapper format and bare array format are supported.
 
 When using offline mode, GUIDs for custom (non-Microsoft) applications, groups, users, and named locations cannot be resolved without Graph API. Provide a mapping file to show friendly names instead of `[Unknown Application]` / `[Unknown Group]` placeholders.
 
-### Step 1 — Find which GUIDs need mapping
+### Automatic — use Build-NameMapping.ps1
 
-Run offline without a mapping file first:
+The easiest approach is to export entity lists from the Entra Portal and let `Build-NameMapping.ps1` parse them automatically:
+
+| Export | Portal location |
+|--------|----------------|
+| Users | Entra Portal → Users → **Download users** |
+| Groups | Entra Portal → Groups → **Download groups** |
+| Enterprise Apps | Entra Portal → Enterprise Applications → **Download** |
+| Named Locations | Graph Explorer → `GET /identity/conditionalAccess/namedLocations` → save as JSON |
+
+Then run:
 
 ```powershell
-.\Get-ConditionalAccessReport.ps1 -OfflineMode -PoliciesJsonPath ".\policies.json" -HtmlOnly
+.\Build-NameMapping.ps1 `
+    -UsersCSV          ".\users.csv" `
+    -GroupsCSV         ".\groups.csv" `
+    -AppsCSV           ".\apps.csv" `
+    -NamedLocationsJson ".\namedLocations.json" `
+    -OutputPath        ".\NameMapping.json"
 ```
 
-Open the HTML report and look for `[Unknown Application]`, `[Unknown Group]`, etc. These are the entries you need to map. The raw GUIDs for those entries are in your `policies.json` — search the file for the relevant section (e.g. `includeApplications`, `includeGroups`) to find them.
+All parameters are optional — pass only the exports you have. If `NameMapping.json` already exists and you want to add entries without losing existing ones, add `-Merge`.
 
-### Step 2 — Look up the friendly names
+### Manual — edit the file directly
 
-Find the GUID → name mapping in the Azure Portal:
-
-| Entity | Where to find the Object ID / App ID |
-|--------|--------------------------------------|
-| Applications | **Azure Portal** → Enterprise Applications → select app → **Application ID** (under Properties) |
-| Groups | **Azure Portal** → Groups → select group → **Object ID** (under Overview) |
-| Users | **Azure Portal** → Users → select user → **Object ID** (under Overview) |
-| Named Locations | **Azure Portal** → Conditional Access → Named Locations → select location → the GUID is in the browser URL |
-
-### Step 3 — Create your mapping file
-
-Copy `NameMapping.example.json` to `NameMapping.json` and fill in your GUIDs:
+If you only need to map a few entries, copy `NameMapping.example.json` to `NameMapping.json` and fill in your GUIDs:
 
 ```json
 {
@@ -154,6 +157,17 @@ Copy `NameMapping.example.json` to `NameMapping.json` and fill in your GUIDs:
     }
 }
 ```
+
+Find GUIDs in the Azure Portal:
+
+| Entity | Where to find the ID |
+|--------|----------------------|
+| Applications | Enterprise Applications → select app → **Application ID** (Properties) |
+| Groups | Groups → select group → **Object ID** (Overview) |
+| Users | Users → select user → **Object ID** (Overview) |
+| Named Locations | Conditional Access → Named Locations → select location → GUID is in the browser URL |
+
+Alternatively, run offline first without a mapping file and look for `[Unknown Application]` etc. in the HTML report — then find those GUIDs in `policies.json` to know exactly which ones need entries.
 
 Then re-run with `-NameMappingPath`:
 
@@ -244,6 +258,7 @@ Customize the tool by editing `config.json`:
 ```
 ConditionalAccessDocumenter/
 ├── Get-ConditionalAccessReport.ps1   # Main entry point
+├── Build-NameMapping.ps1             # Utility: build NameMapping.json from Entra CSV/JSON exports
 ├── config.json                        # Configuration file
 ├── NameMapping.example.json           # Template for offline name resolution
 ├── README.md                          # This file

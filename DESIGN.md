@@ -246,6 +246,29 @@ Generates a self-contained HTML file. All policy data is embedded as JSON; all a
 
 ---
 
+### `Build-NameMapping.ps1` — Name Mapping Utility
+
+Standalone utility script. Parses Entra ID CSV/JSON exports and writes a `NameMapping.json` file for use with `-OfflineMode -NameMappingPath`. Does not depend on any project module.
+
+**Parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `-UsersCSV` | Path to users CSV (Entra Portal → Users → Download users) |
+| `-GroupsCSV` | Path to groups CSV (Entra Portal → Groups → Download groups) |
+| `-AppsCSV` | Path to enterprise apps CSV (Entra Portal → Enterprise Applications → Download) |
+| `-NamedLocationsJson` | Path to named locations JSON (`GET /identity/conditionalAccess/namedLocations`) |
+| `-OutputPath` | Output path for `NameMapping.json` (default: `.\NameMapping.json`) |
+| `-Merge` | Merge new entries into an existing file rather than overwriting |
+
+All inputs are optional — pass only what's available. The script detects column name variations across Entra export formats (e.g. `id` vs `Object ID`; `displayName` vs `Display name`).
+
+**Key implementation note — Apps CSV column:** CA policies reference the `appId` (Application ID), not the `objectId` (service principal Object ID). The script explicitly looks for `appId` / `Application ID` columns and ignores `objectId` to avoid silent mismatches.
+
+**Named locations:** There is no CSV export for named locations in the Entra Portal. The script accepts a JSON export from the Graph API endpoint `GET /identity/conditionalAccess/namedLocations` (supports `{"value":[...]}` wrapper or bare array).
+
+---
+
 ## CI/CD — Security Scanning
 
 `.github/workflows/security.yml` runs on every push and pull request to `main`.
@@ -327,6 +350,7 @@ All endpoints are skipped in offline mode.
 ```
 ConditionalAccessDocumenter/
 ├── Get-ConditionalAccessReport.ps1    # Main entry point
+├── Build-NameMapping.ps1              # Utility: build NameMapping.json from Entra exports
 ├── config.json                         # Configuration
 ├── NameMapping.example.json            # Template for offline name resolution
 ├── README.md                           # User documentation
