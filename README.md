@@ -34,7 +34,7 @@ A PowerShell-based tool that documents Microsoft Entra ID Conditional Access Pol
 
 ### Offline (from exported JSON)
 
-1. Export your policies from the Azure Portal (Conditional Access blade → Export) or via Graph Explorer
+1. Export your policies to a JSON file (see [Exporting Your Policies](#exporting-your-policies) below)
 2. Run:
 
 ```powershell
@@ -86,12 +86,7 @@ A PowerShell-based tool that documents Microsoft Entra ID Conditional Access Pol
 .\Get-ConditionalAccessReport.ps1 -OfflineMode -PoliciesJsonPath ".\policies.json" -HtmlOnly
 ```
 
-The exported JSON can come from:
-- The Azure Portal → Conditional Access → Export
-- Graph Explorer: `GET https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies`
-- PowerShell: `Invoke-RestMethod -Uri "https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies" -Headers @{Authorization="Bearer $token"}`
-
-Both `{"value":[...]}` wrapper format and bare array format are supported.
+Both `{"value":[...]}` wrapper format and bare array format are supported. See [Exporting Your Policies](#exporting-your-policies) for how to get this file.
 
 ### Output Options
 
@@ -109,34 +104,85 @@ Both `{"value":[...]}` wrapper format and bare array format are supported.
 .\Get-ConditionalAccessReport.ps1 -IncludeDisabled $false
 ```
 
+## Exporting Your Policies
+
+Before using offline mode you need a JSON file containing your Conditional Access policies. Choose whichever method suits you.
+
+### Option 1 — Graph Explorer (browser, no scripting)
+
+1. Go to [Graph Explorer](https://developer.microsoft.com/en-us/graph/graph-explorer) and sign in with your Entra ID account
+2. Run this request:
+   ```
+   GET https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies
+   ```
+3. Click **Response preview**, then copy the full JSON response
+4. Paste it into a file and save as `policies.json`
+
+> You need the `Policy.Read.All` permission. Graph Explorer will prompt you to consent if it's not already granted.
+
+### Option 2 — PowerShell (no extra modules)
+
+If you already have a bearer token (e.g. from a previous Graph session):
+
+```powershell
+$token = "your-bearer-token"
+$response = Invoke-RestMethod `
+    -Uri "https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies" `
+    -Headers @{ Authorization = "Bearer $token" }
+$response | ConvertTo-Json -Depth 20 | Set-Content -Path ".\policies.json" -Encoding UTF8
+```
+
+### Option 3 — Azure CLI
+
+```bash
+az login
+az rest --method GET \
+  --uri "https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies" \
+  --output json > policies.json
+```
+
+### Option 4 — Microsoft Graph PowerShell SDK
+
+```powershell
+Connect-MgGraph -Scopes "Policy.Read.All"
+Get-MgIdentityConditionalAccessPolicy | ConvertTo-Json -Depth 20 | Set-Content -Path ".\policies.json" -Encoding UTF8
+```
+
+> **Note:** The SDK export is a bare array rather than a `{"value":[...]}` wrapper — both formats are handled automatically.
+
+---
+
 ## Offline Name Mapping
 
 When using offline mode, GUIDs for custom (non-Microsoft) applications, groups, users, and named locations cannot be resolved without Graph API. Provide a mapping file to show friendly names instead of `[Unknown Application]` / `[Unknown Group]` placeholders.
 
-### Step 1 — Find which GUIDs need mapping
+### Automatic — use Build-NameMapping.ps1
 
-Run offline without a mapping file first:
+The easiest approach is to export entity lists from the Entra Portal and let `Build-NameMapping.ps1` parse them automatically:
+
+| Export | Portal location |
+|--------|----------------|
+| Users | Entra Portal → Users → **Download users** |
+| Groups | Entra Portal → Groups → **Download groups** |
+| Enterprise Apps | Entra Portal → Enterprise Applications → **Download** |
+| Named Locations | Graph Explorer → `GET /identity/conditionalAccess/namedLocations` → save as JSON |
+
+Then run:
 
 ```powershell
-.\Get-ConditionalAccessReport.ps1 -OfflineMode -PoliciesJsonPath ".\policies.json" -HtmlOnly
+.\Build-NameMapping.ps1 `
+    -UsersCSV          ".\users.csv" `
+    -GroupsCSV         ".\groups.csv" `
+    -AppsCSV           ".\apps.csv" `
+    -NamedLocationsJson ".\namedLocations.json" `
+    -OutputPath        ".\NameMapping.json"
 ```
 
-Open the HTML report and look for `[Unknown Application]`, `[Unknown Group]`, etc. These are the entries you need to map. The raw GUIDs for those entries are in your `policies.json` — search the file for the relevant section (e.g. `includeApplications`, `includeGroups`) to find them.
+All parameters are optional — pass only the exports you have. If `NameMapping.json` already exists and you want to add entries without losing existing ones, add `-Merge`.
 
-### Step 2 — Look up the friendly names
+### Manual — edit the file directly
 
-Find the GUID → name mapping in the Azure Portal:
-
-| Entity | Where to find the Object ID / App ID |
-|--------|--------------------------------------|
-| Applications | **Azure Portal** → Enterprise Applications → select app → **Application ID** (under Properties) |
-| Groups | **Azure Portal** → Groups → select group → **Object ID** (under Overview) |
-| Users | **Azure Portal** → Users → select user → **Object ID** (under Overview) |
-| Named Locations | **Azure Portal** → Conditional Access → Named Locations → select location → the GUID is in the browser URL |
-
-### Step 3 — Create your mapping file
-
-Copy `NameMapping.example.json` to `NameMapping.json` and fill in your GUIDs:
+If you only need to map a few entries, copy `NameMapping.example.json` to `NameMapping.json` and fill in your GUIDs:
 
 ```json
 {
@@ -154,6 +200,17 @@ Copy `NameMapping.example.json` to `NameMapping.json` and fill in your GUIDs:
     }
 }
 ```
+
+Find GUIDs in the Azure Portal:
+
+| Entity | Where to find the ID |
+|--------|----------------------|
+| Applications | Enterprise Applications → select app → **Application ID** (Properties) |
+| Groups | Groups → select group → **Object ID** (Overview) |
+| Users | Users → select user → **Object ID** (Overview) |
+| Named Locations | Conditional Access → Named Locations → select location → GUID is in the browser URL |
+
+Alternatively, run offline first without a mapping file and look for `[Unknown Application]` etc. in the HTML report — then find those GUIDs in `policies.json` to know exactly which ones need entries.
 
 Then re-run with `-NameMappingPath`:
 
@@ -244,6 +301,7 @@ Customize the tool by editing `config.json`:
 ```
 ConditionalAccessDocumenter/
 ├── Get-ConditionalAccessReport.ps1   # Main entry point
+├── Build-NameMapping.ps1             # Utility: build NameMapping.json from Entra CSV/JSON exports
 ├── config.json                        # Configuration file
 ├── NameMapping.example.json           # Template for offline name resolution
 ├── README.md                          # This file
