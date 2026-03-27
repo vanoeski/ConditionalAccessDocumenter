@@ -30,6 +30,21 @@
 .PARAMETER IncludeDisabled
     Include disabled policies in the report. Defaults to $true
 
+.PARAMETER OfflineMode
+    Generate reports from a previously exported JSON file instead of connecting to Graph API.
+    Requires -PoliciesJsonPath. No internet connection or authentication is needed.
+
+.PARAMETER PoliciesJsonPath
+    Path to a JSON file containing exported Conditional Access policies.
+    Export from the Azure Portal or via: Invoke-GraphRequest -Uri "/identity/conditionalAccess/policies" | ConvertTo-Json -Depth 20
+    Required when using -OfflineMode.
+
+.PARAMETER NameMappingPath
+    Optional path to a JSON file that maps GUIDs to friendly display names for custom
+    apps, groups, users, and named locations that are not resolvable without Graph API.
+    See NameMapping.example.json for the expected format.
+    Only used with -OfflineMode.
+
 .EXAMPLE
     .\Get-ConditionalAccessReport.ps1
 
@@ -44,6 +59,16 @@
     .\Get-ConditionalAccessReport.ps1 -HtmlOnly
 
     Generates only the HTML report.
+
+.EXAMPLE
+    .\Get-ConditionalAccessReport.ps1 -OfflineMode -PoliciesJsonPath ".\policies.json"
+
+    Generates reports from an exported JSON file with no internet connection.
+
+.EXAMPLE
+    .\Get-ConditionalAccessReport.ps1 -OfflineMode -PoliciesJsonPath ".\policies.json" -NameMappingPath ".\NameMapping.json"
+
+    Generates reports offline, resolving custom app/group names from a mapping file.
 
 .NOTES
     Author: Conditional Access Documenter
@@ -79,7 +104,16 @@ param(
     [bool]$IncludeDisabled = $true,
 
     [Parameter(Mandatory = $false)]
-    [string]$ConfigPath = ".\config.json"
+    [string]$ConfigPath = ".\config.json",
+
+    [Parameter(Mandatory = $false)]
+    [switch]$OfflineMode,
+
+    [Parameter(Mandatory = $false)]
+    [string]$PoliciesJsonPath,
+
+    [Parameter(Mandatory = $false)]
+    [string]$NameMappingPath
 )
 
 #region Initialization
@@ -165,41 +199,91 @@ Add-Type -AssemblyName System.Web
 
 #endregion
 
-#region Authentication
+#region Authentication & Policy Source
 
-Write-Host ""
-Write-Host "Connecting to Microsoft Graph..." -ForegroundColor Cyan
-Write-Host ""
+if ($OfflineMode) {
+    # ── Offline mode: load policies from a JSON export ─────────────────────────
+    if (-not $PoliciesJsonPath) {
+        Write-Error "-PoliciesJsonPath is required when using -OfflineMode. Provide the path to your exported CA policies JSON file."
+        exit 1
+    }
 
-# Build auth params — only pass values that were explicitly supplied
-$authParams = @{ TenantId = $TenantId }
-if ($ClientId)     { $authParams.ClientId     = $ClientId }
-if ($ClientSecret) { $authParams.ClientSecret = $ClientSecret }
-if ($AuthMethod)   { $authParams.AuthMethod   = $AuthMethod }
+    $resolvedJsonPath = $PoliciesJsonPath
+    if (-not [System.IO.Path]::IsPathRooted($resolvedJsonPath)) {
+        $resolvedJsonPath = Join-Path (Get-Location) $resolvedJsonPath
+    }
 
-$connected = Connect-Graph @authParams
+    if (-not (Test-Path $resolvedJsonPath)) {
+        Write-Error "Policies JSON file not found: $resolvedJsonPath"
+        exit 1
+    }
 
-if (-not $connected) {
-    Write-Error "Failed to authenticate to Microsoft Graph. Please try again."
-    exit 1
+    Write-Host ""
+    Write-Host "Offline mode — loading policies from:" -ForegroundColor Cyan
+    Write-Host "  $resolvedJsonPath" -ForegroundColor Gray
+    Write-Host ""
+
+    # Load optional name mapping before enabling offline mode
+    if ($NameMappingPath) {
+        $resolvedMappingPath = $NameMappingPath
+        if (-not [System.IO.Path]::IsPathRooted($resolvedMappingPath)) {
+            $resolvedMappingPath = Join-Path (Get-Location) $resolvedMappingPath
+        }
+        Write-Host "Loading name mappings from: $resolvedMappingPath" -ForegroundColor Gray
+        Initialize-OfflineCacheFromMapping -MappingPath $resolvedMappingPath
+        Write-Host ""
+    }
+
+    # Prevent any Graph API calls during name resolution
+    Enable-OfflineMode
+
+    # Parse policies — handle both {value:[...]} and bare array exports
+    $jsonContent = Get-Content $resolvedJsonPath -Raw | ConvertFrom-Json
+    if ($jsonContent.value) {
+        $rawPolicies = @($jsonContent.value)
+    } else {
+        $rawPolicies = @($jsonContent)
+    }
+
+    if (-not $rawPolicies -or $rawPolicies.Count -eq 0) {
+        Write-Warning "No policies found in the JSON file."
+        exit 0
+    }
+
+    Write-Host "Found $($rawPolicies.Count) policies in file" -ForegroundColor Green
+    Write-Host ""
+
+} else {
+    # ── Online mode: authenticate and fetch from Microsoft Graph ────────────────
+    Write-Host ""
+    Write-Host "Connecting to Microsoft Graph..." -ForegroundColor Cyan
+    Write-Host ""
+
+    $authParams = @{ TenantId = $TenantId }
+    if ($ClientId)     { $authParams.ClientId     = $ClientId }
+    if ($ClientSecret) { $authParams.ClientSecret = $ClientSecret }
+    if ($AuthMethod)   { $authParams.AuthMethod   = $AuthMethod }
+
+    $connected = Connect-Graph @authParams
+
+    if (-not $connected) {
+        Write-Error "Failed to authenticate to Microsoft Graph. Please try again."
+        exit 1
+    }
+
+    Write-Host ""
+
+    $rawPolicies = @(Get-ConditionalAccessPolicies)
+
+    if (-not $rawPolicies -or $rawPolicies.Count -eq 0) {
+        Write-Warning "No Conditional Access policies found in this tenant."
+        Disconnect-Graph
+        exit 0
+    }
+
+    Write-Host "Found $($rawPolicies.Count) policies" -ForegroundColor Green
+    Write-Host ""
 }
-
-Write-Host ""
-
-#endregion
-
-#region Fetch Policies
-
-$rawPolicies = @(Get-ConditionalAccessPolicies)
-
-if (-not $rawPolicies -or $rawPolicies.Count -eq 0) {
-    Write-Warning "No Conditional Access policies found in this tenant."
-    Disconnect-Graph
-    exit 0
-}
-
-Write-Host "Found $($rawPolicies.Count) policies" -ForegroundColor Green
-Write-Host ""
 
 #endregion
 
@@ -332,7 +416,9 @@ Write-Host "Output Directory: $outputDir" -ForegroundColor Gray
 Write-Host "Duration: $($duration.TotalSeconds.ToString('F1')) seconds" -ForegroundColor Gray
 Write-Host ""
 
-# Disconnect
-Disconnect-Graph
+# Disconnect (online mode only)
+if (-not $OfflineMode) {
+    Disconnect-Graph
+}
 
 #endregion

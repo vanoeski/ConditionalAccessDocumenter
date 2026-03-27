@@ -20,6 +20,9 @@ $script:NameCache = @{
     NamedLocations = @{}
 }
 
+# When $true, skips all Graph API calls during name resolution
+$script:OfflineMode = $false
+
 # Well-known Microsoft Application IDs
 $script:WellKnownApps = @{
     "00000001-0000-0000-c000-000000000000" = "Azure ESTS Service"
@@ -178,6 +181,67 @@ $script:WellKnownRoles = @{
     "ffd52fa5-98dc-465c-991d-fc073eb59f8f" = "Attribute Definition Administrator"
     "1d336d2c-4ae8-42ef-9711-b3604ce3fc2c" = "Attribute Definition Reader"
     "All" = "All Roles"
+}
+
+function Enable-OfflineMode {
+    <#
+    .SYNOPSIS
+        Enables offline mode — name resolution skips Graph API calls and returns
+        friendly placeholders for any IDs not found in the cache or well-known tables.
+    #>
+    $script:OfflineMode = $true
+    Write-Verbose "Offline mode enabled — Graph API calls will be skipped during name resolution"
+}
+
+function Initialize-OfflineCacheFromMapping {
+    <#
+    .SYNOPSIS
+        Pre-populates the name cache from a JSON mapping file so that custom app,
+        group, user, and named-location GUIDs resolve to friendly names offline.
+
+    .PARAMETER MappingPath
+        Path to a JSON file with the structure shown in NameMapping.example.json.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$MappingPath
+    )
+
+    if (-not (Test-Path $MappingPath)) {
+        Write-Warning "Name mapping file not found: $MappingPath"
+        return
+    }
+
+    $mapping = Get-Content $MappingPath -Raw | ConvertFrom-Json
+
+    if ($mapping.applications) {
+        $mapping.applications.PSObject.Properties | ForEach-Object {
+            $script:NameCache.Applications[$_.Name] = $_.Value
+        }
+        Write-Host "  Loaded $($mapping.applications.PSObject.Properties.Count) application name mapping(s)" -ForegroundColor DarkGray
+    }
+
+    if ($mapping.groups) {
+        $mapping.groups.PSObject.Properties | ForEach-Object {
+            $script:NameCache.Groups[$_.Name] = $_.Value
+        }
+        Write-Host "  Loaded $($mapping.groups.PSObject.Properties.Count) group name mapping(s)" -ForegroundColor DarkGray
+    }
+
+    if ($mapping.users) {
+        $mapping.users.PSObject.Properties | ForEach-Object {
+            $script:NameCache.Users[$_.Name] = $_.Value
+        }
+        Write-Host "  Loaded $($mapping.users.PSObject.Properties.Count) user name mapping(s)" -ForegroundColor DarkGray
+    }
+
+    if ($mapping.namedLocations) {
+        $mapping.namedLocations.PSObject.Properties | ForEach-Object {
+            $script:NameCache.NamedLocations[$_.Name] = $_.Value
+        }
+        Write-Host "  Loaded $($mapping.namedLocations.PSObject.Properties.Count) named location mapping(s)" -ForegroundColor DarkGray
+    }
 }
 
 function Get-WellKnownApplications {
@@ -506,29 +570,32 @@ function Get-ApplicationDisplayName {
         return $name
     }
 
-    # Query Graph API
-    try {
-        # Try service principals first (most common)
-        $sp = Invoke-GraphRequest -Uri "/servicePrincipals?`$filter=appId eq '$AppId'&`$select=displayName"
-        if ($sp -and $sp.displayName) {
-            $script:NameCache.Applications[$AppId] = $sp.displayName
-            return $sp.displayName
-        }
+    # Query Graph API (skipped in offline mode)
+    if (-not $script:OfflineMode) {
+        try {
+            # Try service principals first (most common)
+            $sp = Invoke-GraphRequest -Uri "/servicePrincipals?`$filter=appId eq '$AppId'&`$select=displayName"
+            if ($sp -and $sp.displayName) {
+                $script:NameCache.Applications[$AppId] = $sp.displayName
+                return $sp.displayName
+            }
 
-        # Fallback to applications
-        $app = Invoke-GraphRequest -Uri "/applications?`$filter=appId eq '$AppId'&`$select=displayName"
-        if ($app -and $app.displayName) {
-            $script:NameCache.Applications[$AppId] = $app.displayName
-            return $app.displayName
+            # Fallback to applications
+            $app = Invoke-GraphRequest -Uri "/applications?`$filter=appId eq '$AppId'&`$select=displayName"
+            if ($app -and $app.displayName) {
+                $script:NameCache.Applications[$AppId] = $app.displayName
+                return $app.displayName
+            }
+        }
+        catch {
+            Write-Verbose "Could not resolve application ID: $AppId - $_"
         }
     }
-    catch {
-        Write-Verbose "Could not resolve application ID: $AppId - $_"
-    }
 
-    # Return ID if unable to resolve
-    $script:NameCache.Applications[$AppId] = "[Unknown: $AppId]"
-    return "[Unknown: $AppId]"
+    # Return friendly name if unable to resolve
+    $unknownName = if ($script:OfflineMode) { "[Unknown Application]" } else { "[Unknown: $AppId]" }
+    $script:NameCache.Applications[$AppId] = $unknownName
+    return $unknownName
 }
 
 function Get-UserDisplayName {
@@ -555,21 +622,24 @@ function Get-UserDisplayName {
         return $script:NameCache.Users[$UserId]
     }
 
-    # Query Graph API
-    try {
-        $user = Invoke-GraphRequest -Uri "/users/$UserId`?`$select=displayName,userPrincipalName"
-        if ($user) {
-            $displayName = if ($user.displayName) { $user.displayName } else { $user.userPrincipalName }
-            $script:NameCache.Users[$UserId] = $displayName
-            return $displayName
+    # Query Graph API (skipped in offline mode)
+    if (-not $script:OfflineMode) {
+        try {
+            $user = Invoke-GraphRequest -Uri "/users/$UserId`?`$select=displayName,userPrincipalName"
+            if ($user) {
+                $displayName = if ($user.displayName) { $user.displayName } else { $user.userPrincipalName }
+                $script:NameCache.Users[$UserId] = $displayName
+                return $displayName
+            }
+        }
+        catch {
+            Write-Verbose "Could not resolve user ID: $UserId - $_"
         }
     }
-    catch {
-        Write-Verbose "Could not resolve user ID: $UserId - $_"
-    }
 
-    $script:NameCache.Users[$UserId] = "[Unknown User: $UserId]"
-    return "[Unknown User: $UserId]"
+    $unknownName = if ($script:OfflineMode) { "[Unknown User]" } else { "[Unknown User: $UserId]" }
+    $script:NameCache.Users[$UserId] = $unknownName
+    return $unknownName
 }
 
 function Get-GroupDisplayName {
@@ -594,20 +664,23 @@ function Get-GroupDisplayName {
         return $script:NameCache.Groups[$GroupId]
     }
 
-    # Query Graph API
-    try {
-        $group = Invoke-GraphRequest -Uri "/groups/$GroupId`?`$select=displayName"
-        if ($group -and $group.displayName) {
-            $script:NameCache.Groups[$GroupId] = $group.displayName
-            return $group.displayName
+    # Query Graph API (skipped in offline mode)
+    if (-not $script:OfflineMode) {
+        try {
+            $group = Invoke-GraphRequest -Uri "/groups/$GroupId`?`$select=displayName"
+            if ($group -and $group.displayName) {
+                $script:NameCache.Groups[$GroupId] = $group.displayName
+                return $group.displayName
+            }
+        }
+        catch {
+            Write-Verbose "Could not resolve group ID: $GroupId - $_"
         }
     }
-    catch {
-        Write-Verbose "Could not resolve group ID: $GroupId - $_"
-    }
 
-    $script:NameCache.Groups[$GroupId] = "[Unknown Group: $GroupId]"
-    return "[Unknown Group: $GroupId]"
+    $unknownName = if ($script:OfflineMode) { "[Unknown Group]" } else { "[Unknown Group: $GroupId]" }
+    $script:NameCache.Groups[$GroupId] = $unknownName
+    return $unknownName
 }
 
 function Get-RoleDisplayName {
@@ -639,20 +712,23 @@ function Get-RoleDisplayName {
         return $name
     }
 
-    # Query Graph API
-    try {
-        $role = Invoke-GraphRequest -Uri "/directoryRoleTemplates/$RoleId"
-        if ($role -and $role.displayName) {
-            $script:NameCache.Roles[$RoleId] = $role.displayName
-            return $role.displayName
+    # Query Graph API (skipped in offline mode)
+    if (-not $script:OfflineMode) {
+        try {
+            $role = Invoke-GraphRequest -Uri "/directoryRoleTemplates/$RoleId"
+            if ($role -and $role.displayName) {
+                $script:NameCache.Roles[$RoleId] = $role.displayName
+                return $role.displayName
+            }
+        }
+        catch {
+            Write-Verbose "Could not resolve role ID: $RoleId - $_"
         }
     }
-    catch {
-        Write-Verbose "Could not resolve role ID: $RoleId - $_"
-    }
 
-    $script:NameCache.Roles[$RoleId] = "[Unknown Role: $RoleId]"
-    return "[Unknown Role: $RoleId]"
+    $unknownName = if ($script:OfflineMode) { "[Unknown Role]" } else { "[Unknown Role: $RoleId]" }
+    $script:NameCache.Roles[$RoleId] = $unknownName
+    return $unknownName
 }
 
 function Get-NamedLocationName {
@@ -679,20 +755,23 @@ function Get-NamedLocationName {
         return $script:NameCache.NamedLocations[$LocationId]
     }
 
-    # Query Graph API
-    try {
-        $location = Invoke-GraphRequest -Uri "/identity/conditionalAccess/namedLocations/$LocationId"
-        if ($location -and $location.displayName) {
-            $script:NameCache.NamedLocations[$LocationId] = $location.displayName
-            return $location.displayName
+    # Query Graph API (skipped in offline mode)
+    if (-not $script:OfflineMode) {
+        try {
+            $location = Invoke-GraphRequest -Uri "/identity/conditionalAccess/namedLocations/$LocationId"
+            if ($location -and $location.displayName) {
+                $script:NameCache.NamedLocations[$LocationId] = $location.displayName
+                return $location.displayName
+            }
+        }
+        catch {
+            Write-Verbose "Could not resolve location ID: $LocationId - $_"
         }
     }
-    catch {
-        Write-Verbose "Could not resolve location ID: $LocationId - $_"
-    }
 
-    $script:NameCache.NamedLocations[$LocationId] = "[Unknown Location: $LocationId]"
-    return "[Unknown Location: $LocationId]"
+    $unknownName = if ($script:OfflineMode) { "[Unknown Location]" } else { "[Unknown Location: $LocationId]" }
+    $script:NameCache.NamedLocations[$LocationId] = $unknownName
+    return $unknownName
 }
 
 function Clear-NameCache {
@@ -734,5 +813,7 @@ Export-ModuleMember -Function @(
     'Get-NamedLocationName',
     'Get-WellKnownApplications',
     'Get-WellKnownRoles',
-    'Clear-NameCache'
+    'Clear-NameCache',
+    'Enable-OfflineMode',
+    'Initialize-OfflineCacheFromMapping'
 )
