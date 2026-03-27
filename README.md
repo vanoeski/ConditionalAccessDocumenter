@@ -34,7 +34,7 @@ A PowerShell-based tool that documents Microsoft Entra ID Conditional Access Pol
 
 ### Offline (from exported JSON)
 
-1. Export your policies from the Azure Portal (Conditional Access blade → Export) or via Graph Explorer
+1. Export your policies to a JSON file (see [Exporting Your Policies](#exporting-your-policies) below)
 2. Run:
 
 ```powershell
@@ -86,12 +86,7 @@ A PowerShell-based tool that documents Microsoft Entra ID Conditional Access Pol
 .\Get-ConditionalAccessReport.ps1 -OfflineMode -PoliciesJsonPath ".\policies.json" -HtmlOnly
 ```
 
-The exported JSON can come from:
-- The Azure Portal → Conditional Access → Export
-- Graph Explorer: `GET https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies`
-- PowerShell: `Invoke-RestMethod -Uri "https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies" -Headers @{Authorization="Bearer $token"}`
-
-Both `{"value":[...]}` wrapper format and bare array format are supported.
+Both `{"value":[...]}` wrapper format and bare array format are supported. See [Exporting Your Policies](#exporting-your-policies) for how to get this file.
 
 ### Output Options
 
@@ -108,6 +103,54 @@ Both `{"value":[...]}` wrapper format and bare array format are supported.
 # Exclude disabled policies
 .\Get-ConditionalAccessReport.ps1 -IncludeDisabled $false
 ```
+
+## Exporting Your Policies
+
+Before using offline mode you need a JSON file containing your Conditional Access policies. Choose whichever method suits you.
+
+### Option 1 — Graph Explorer (browser, no scripting)
+
+1. Go to [Graph Explorer](https://developer.microsoft.com/en-us/graph/graph-explorer) and sign in with your Entra ID account
+2. Run this request:
+   ```
+   GET https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies
+   ```
+3. Click **Response preview**, then copy the full JSON response
+4. Paste it into a file and save as `policies.json`
+
+> You need the `Policy.Read.All` permission. Graph Explorer will prompt you to consent if it's not already granted.
+
+### Option 2 — PowerShell (no extra modules)
+
+If you already have a bearer token (e.g. from a previous Graph session):
+
+```powershell
+$token = "your-bearer-token"
+$response = Invoke-RestMethod `
+    -Uri "https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies" `
+    -Headers @{ Authorization = "Bearer $token" }
+$response | ConvertTo-Json -Depth 20 | Set-Content -Path ".\policies.json" -Encoding UTF8
+```
+
+### Option 3 — Azure CLI
+
+```bash
+az login
+az rest --method GET \
+  --uri "https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies" \
+  --output json > policies.json
+```
+
+### Option 4 — Microsoft Graph PowerShell SDK
+
+```powershell
+Connect-MgGraph -Scopes "Policy.Read.All"
+Get-MgIdentityConditionalAccessPolicy | ConvertTo-Json -Depth 20 | Set-Content -Path ".\policies.json" -Encoding UTF8
+```
+
+> **Note:** The SDK export is a bare array rather than a `{"value":[...]}` wrapper — both formats are handled automatically.
+
+---
 
 ## Offline Name Mapping
 
