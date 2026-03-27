@@ -2,28 +2,34 @@
 
 ## Overview
 
-A PowerShell-based solution that queries Microsoft Entra ID Conditional Access Policies via Microsoft Graph API and generates:
-- A PowerPoint slide deck (one policy per slide, Open XML format, no Office dependency)
-- A self-contained multi-view HTML report (all analysis client-side, no external JS libraries)
+A PowerShell-based solution that generates CA policy reports in two modes:
+
+- **Online**: Queries Microsoft Entra ID via Microsoft Graph API, resolves GUIDs to display names in real time
+- **Offline**: Reads a previously exported JSON file, resolves names from built-in tables and an optional user-supplied mapping file — no credentials or internet required
+
+Output: a PowerPoint slide deck (Open XML, no Office dependency) and a self-contained multi-view HTML report (all analysis client-side, no external JS libraries).
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Main Script (Orchestrator)                    │
-│                  Get-ConditionalAccessReport.ps1                 │
-└─────────────────────────┬───────────────────────────────────────┘
-                          │
-        ┌─────────────────┼──────────────────┐
-        ▼                 ▼                  ▼
-┌───────────────┐ ┌───────────────┐ ┌───────────────┐
-│  GraphApi     │ │  PowerPoint   │ │     HTML      │
-│  Helper       │ │  Generator    │ │   Generator   │
-├───────────────┤ └───────────────┘ └───────────────┘
-│  PolicyParser │
-└───────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                   Main Script (Orchestrator)                  │
+│                 Get-ConditionalAccessReport.ps1               │
+│                                                               │
+│   Online path: Connect-Graph → Get-ConditionalAccessPolicies  │
+│   Offline path: Load JSON → Initialize-OfflineCacheFromMapping│
+└──────────────────────┬───────────────────────────────────────┘
+                       │
+       ┌───────────────┼──────────────────┐
+       ▼               ▼                  ▼
+┌─────────────┐ ┌─────────────┐ ┌──────────────┐
+│  GraphApi   │ │  PowerPoint │ │     HTML     │
+│  Helper     │ │  Generator  │ │   Generator  │
+├─────────────┤ └─────────────┘ └──────────────┘
+│ PolicyParser│
+└─────────────┘
 ```
 
 ---
@@ -31,8 +37,6 @@ A PowerShell-based solution that queries Microsoft Entra ID Conditional Access P
 ## Modules
 
 ### `Get-ConditionalAccessReport.ps1` — Main Orchestrator
-
-Entry point. Loads modules, authenticates, fetches policies, processes them, and calls both generators.
 
 **Parameters:**
 
@@ -47,41 +51,73 @@ Entry point. Loads modules, authenticates, fetches policies, processes them, and
 | `-PptxOnly` | `$false` | Skip HTML generation |
 | `-IncludeDisabled` | `$true` | Include disabled policies |
 | `-ConfigPath` | `".\config.json"` | Path to configuration file |
+| `-OfflineMode` | `$false` | Skip Graph API; load policies from JSON file |
+| `-PoliciesJsonPath` | *(none)* | Path to exported CA policies JSON (required with `-OfflineMode`) |
+| `-NameMappingPath` | *(none)* | Path to GUID→name mapping JSON for offline resolution |
+
+**Flow — Online:**
+1. Load config → import modules
+2. `Connect-Graph` (device code or client credentials)
+3. `Get-ConditionalAccessPolicies` (paginated Graph API)
+4. `ConvertTo-PolicyObject -ResolveNames` for each policy (API-backed resolution)
+5. Generate PowerPoint and/or HTML → `Disconnect-Graph`
+
+**Flow — Offline:**
+1. Load config → import modules
+2. `Initialize-OfflineCacheFromMapping` (if `-NameMappingPath` supplied)
+3. `Enable-OfflineMode` (blocks any Graph API calls)
+4. Parse JSON from `-PoliciesJsonPath` (handles `{"value":[...]}` wrapper or bare array)
+5. `ConvertTo-PolicyObject -ResolveNames` for each policy (cache/well-known-only resolution)
+6. Generate PowerPoint and/or HTML
 
 ---
 
 ### `Modules/GraphApiHelper.psm1`
 
-Handles all Microsoft Graph API interaction: authentication, paginated requests, ID resolution, and caching.
+Handles Graph API authentication, paginated requests, ID resolution with caching, and offline mode.
 
 **Authentication:**
-
-Two flows are supported. Auto-detection: if `-ClientSecret` is provided, `ClientCredentials` is used; otherwise `DeviceCode`.
 
 | Flow | Grant Type | Use Case |
 |------|-----------|---------|
 | Device Code | `urn:ietf:params:oauth:grant-type:device_code` | Interactive, delegated permissions |
 | Client Credentials | `client_credentials` | Unattended, application permissions |
 
+Auto-detection: if `-ClientSecret` is provided → `ClientCredentials`; otherwise → `DeviceCode`.
+
 Token endpoint: `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token`
+
+**Offline Mode:**
+
+Controlled by `$script:OfflineMode`. When `$true`, all five ID resolution functions skip the Graph API block and fall through to the cache or a friendly placeholder.
+
+Name resolution order (both modes):
+1. Special values (`"All"`, `"Office365"`, `"AllTrusted"`, etc.)
+2. In-memory cache (`$script:NameCache`)
+3. Well-known tables (`$script:WellKnownApps`, `$script:WellKnownRoles` — 120+ entries)
+4. **Online only:** Graph API query → cache result
+5. **Offline fallback:** `[Unknown Application]` / `[Unknown Group]` / `[Unknown User]` / `[Unknown Role]` / `[Unknown Location]` — no raw GUIDs exposed
 
 **Exported Functions:**
 
 | Function | Description |
 |----------|-------------|
-| `Connect-Graph` | Authenticate and store access token in module scope |
-| `Disconnect-Graph` | Clear stored token |
-| `Invoke-GraphRequest` | Generic REST wrapper with pagination (`@odata.nextLink`) and retry |
-| `Get-ConditionalAccessPolicies` | Fetch all policies from `/identity/conditionalAccess/policies` |
-| `Get-ApplicationDisplayName` | Resolve app ID → name via `/servicePrincipals` then `/applications` |
-| `Get-UserDisplayName` | Resolve user ID → display name |
-| `Get-GroupDisplayName` | Resolve group ID → display name |
-| `Get-RoleDisplayName` | Resolve role template ID → display name |
-| `Get-NamedLocationName` | Resolve named location ID → display name |
+| `Connect-Graph` | Authenticate and store access token |
+| `Disconnect-Graph` | Clear stored token and cache |
+| `Invoke-GraphRequest` | REST wrapper with pagination and retry |
+| `Get-ConditionalAccessPolicies` | Fetch all policies from Graph |
+| `Get-ApplicationDisplayName` | Resolve app ID → name |
+| `Get-UserDisplayName` | Resolve user ID → name |
+| `Get-GroupDisplayName` | Resolve group ID → name |
+| `Get-RoleDisplayName` | Resolve role template ID → name |
+| `Get-NamedLocationName` | Resolve named location ID → name |
+| `Get-WellKnownApplications` | Return built-in app GUID table |
+| `Get-WellKnownRoles` | Return built-in role GUID table |
+| `Clear-NameCache` | Flush all cached resolutions |
+| `Enable-OfflineMode` | Set `$script:OfflineMode = $true` |
+| `Initialize-OfflineCacheFromMapping` | Pre-populate cache from a JSON mapping file |
 
-**Caching:** All resolved names are stored in module-scoped hashtables (`$script:AppCache`, `$script:UserCache`, etc.) to avoid redundant API calls.
-
-**Well-Known Application IDs:** A built-in hashtable maps Microsoft first-party app GUIDs to friendly names without API calls.
+**Caching:** All resolved names stored in `$script:NameCache` (hashtable per entity type). Well-known entries are also written to cache on first hit to avoid repeated table lookups.
 
 ---
 
@@ -107,7 +143,7 @@ Transforms raw Graph API policy JSON into structured PowerShell objects with all
     State       = [string]   # "Enabled", "Disabled", "Report-Only"
     StateRaw    = [string]   # Raw API value
     Conditions  = @{
-        Users         = @{
+        Users = @{
             IncludeUsers  = [string[]]  # Resolved display names
             ExcludeUsers  = [string[]]
             IncludeGroups = [string[]]
@@ -115,21 +151,21 @@ Transforms raw Graph API policy JSON into structured PowerShell objects with all
             IncludeRoles  = [string[]]
             ExcludeRoles  = [string[]]
         }
-        Applications  = @{
-            IncludeApps       = [string[]]
-            ExcludeApps       = [string[]]
-            IncludeUserActions = [string[]]
+        Applications = @{
+            IncludeApplications = [string[]]
+            ExcludeApplications = [string[]]
+            IncludeUserActions  = [string[]]
         }
-        Platforms     = @{ IncludePlatforms = [string[]]; ExcludePlatforms = [string[]] }
-        Locations     = @{ IncludeLocations = [string[]]; ExcludeLocations = [string[]] }
+        Platforms        = @{ IncludePlatforms = [string[]]; ExcludePlatforms = [string[]] }
+        Locations        = @{ IncludeLocations = [string[]]; ExcludeLocations = [string[]] }
         ClientAppTypes   = [string[]]
         SignInRiskLevels = [string[]]
         UserRiskLevels   = [string[]]
         Devices          = [hashtable]
     }
-    GrantControls  = @{
+    GrantControls = @{
         Operator        = [string]   # "AND" or "OR"
-        BuiltInControls = [string[]] # "mfa", "compliantDevice", etc.
+        BuiltInControls = [string[]]
         CustomControls  = [string[]]
         TermsOfUse      = [string[]]
     }
@@ -149,7 +185,7 @@ Transforms raw Graph API policy JSON into structured PowerShell objects with all
 
 Generates `.pptx` files using Open XML (a PPTX is a ZIP archive of XML files). No Office installation required.
 
-**Approach:** Uses `System.IO.Compression.ZipArchive` to build the ZIP structure in memory, writes XML parts directly. Key quirk: `[Content_Types].xml` must be written with `-LiteralPath` because PowerShell's `-FilePath` treats `[` as a glob wildcard.
+Uses `System.IO.Compression.ZipArchive` to build the ZIP structure in memory. Key quirk: `[Content_Types].xml` must be written with `-LiteralPath` because PowerShell's `-FilePath` treats `[` as a glob wildcard.
 
 **Exported Functions:**
 
@@ -197,36 +233,38 @@ Generates a self-contained HTML file. All policy data is embedded as JSON; all a
 
 **Important implementation detail:** `ConvertTo-Json` in PowerShell silently unwraps single-element arrays to bare scalars at every nesting level. Mitigated with:
 - `@($Policies) | ConvertTo-Json` — force top-level array
-- `const policiesData = [].concat($PoliciesJson)` — JS-side array guard
-- `function arr(x) { return x == null ? [] : [].concat(x); }` — used on every nested field access
+- `function arr(x) { return x == null ? [] : [].concat(x); }` — used on every nested field access in JavaScript
 
-#### HTML Views
+**HTML Views:**
 
-**View 1 — Policy Cards**
+| View | Description |
+|------|-------------|
+| Policy Cards | Searchable, filterable list; real-time search, state filter, dark mode, JSON export |
+| Coverage Matrix | User population × application grid; red = gap; click cell to see covering policies |
+| Overlap & Conflict Analyzer | Pairwise policy comparison; flags conflicts and redundancies |
+| Application Lookup | Search any app to see all policies covering it and coverage stats |
 
-Searchable, filterable list of all policies. Features:
-- Real-time search across all policy content
-- Filter by state (Enabled / Disabled / Report-Only)
-- Sort by name or state
-- Expand/collapse cards
-- Dark mode toggle
-- JSON export
+---
 
-**View 2 — Coverage Matrix**
+## CI/CD — Security Scanning
 
-Grid of user population rows × application columns. Each cell shows whether a policy covers that combination. Red cells highlight gaps. Clicking a cell shows a popover listing which policies apply.
+`.github/workflows/security.yml` runs on every push and pull request to `main`.
 
-Building the matrix:
-1. Collect all unique user populations (`IncludeUsers`, `IncludeGroups`, `IncludeRoles`) across all policies
-2. Collect all unique applications (`IncludeApps`) across all policies
-3. For each cell `[userPop][app]`, find policies whose scope intersects both
+| Job | Tool | Purpose |
+|-----|------|---------|
+| `secret-scan` | [Gitleaks](https://github.com/gitleaks/gitleaks) | Detect hardcoded credentials, tokens, and keys across the full git history |
+| `powershell-scan` | [PSScriptAnalyzer](https://github.com/PowerShell/PSScriptAnalyzer) | Identify PowerShell security anti-patterns; results uploaded as SARIF to GitHub Code Scanning |
 
-**View 3 — Overlap & Conflict Analyzer**
+The workflow is intentionally set to trigger on PRs **targeting `main`** so security checks gate every merge from `dev` → `main`. No code reaches `main` without passing both checks.
 
-Pairwise comparison of all enabled policies. For each pair:
-1. Compute user scope intersection (sets of users/groups/roles or "All")
-2. Compute app scope intersection
-3. If both overlap — flag as **Conflict** (different controls) or **Redundant** (same controls, one is a subset)
+---
+
+## Branch Strategy
+
+| Branch | Purpose |
+|--------|---------|
+| `main` | Stable, production-ready code; protected by security scanning CI |
+| `dev` | Active development; PRs from here into `main` trigger the full security scan |
 
 ---
 
@@ -245,17 +283,12 @@ Pairwise comparison of all enabled policies. For each pair:
 
 ```
 1. POST /oauth2/v2.0/token
-   grant_type=client_credentials
-   client_id={id}
-   client_secret={secret}
+   grant_type=client_credentials, client_id, client_secret
    scope=https://graph.microsoft.com/.default
 2. Store access_token + expiry in module scope
 ```
 
-Required application permissions for service principal:
-- `Policy.Read.All`
-- `Application.Read.All`
-- `Directory.Read.All`
+Required application permissions: `Policy.Read.All`, `Application.Read.All`, `Directory.Read.All`
 
 ---
 
@@ -268,8 +301,10 @@ Required application permissions for service principal:
 | `GET /applications?$filter=appId eq '{id}'` | App display name (fallback) |
 | `GET /users/{id}?$select=displayName` | User display name |
 | `GET /groups/{id}?$select=displayName` | Group display name |
-| `GET /directoryRoles?$filter=roleTemplateId eq '{id}'` | Role display name |
+| `GET /directoryRoleTemplates/{id}` | Role display name |
 | `GET /identity/conditionalAccess/namedLocations/{id}` | Named location display name |
+
+All endpoints are skipped in offline mode.
 
 ---
 
@@ -279,7 +314,8 @@ Required application permissions for service principal:
 |----------|----------|
 | Auth failure | Display error, exit with code 1 |
 | API 429 (rate limit) | Exponential backoff, up to 3 retries |
-| Failed ID resolution | Use original GUID with `[Unresolved]` prefix |
+| Failed ID resolution (online) | `[Unknown: {guid}]` |
+| Failed ID resolution (offline) | `[Unknown Application]` / `[Unknown Group]` / etc. — no GUID exposed |
 | Network timeout | Retry up to 3 times with increasing delay |
 | Single-element array serialization | `@()` operator + `arr()` JS helper |
 | `[Content_Types].xml` wildcard expansion | `-LiteralPath` in `Out-File` |
@@ -292,10 +328,14 @@ Required application permissions for service principal:
 ConditionalAccessDocumenter/
 ├── Get-ConditionalAccessReport.ps1    # Main entry point
 ├── config.json                         # Configuration
+├── NameMapping.example.json            # Template for offline name resolution
 ├── README.md                           # User documentation
 ├── DESIGN.md                           # This document
+├── .github/
+│   └── workflows/
+│       └── security.yml                # Gitleaks + PSScriptAnalyzer CI
 ├── Modules/
-│   ├── GraphApiHelper.psm1             # Graph API + auth
+│   ├── GraphApiHelper.psm1             # Graph API + auth + offline mode
 │   ├── PolicyParser.psm1               # Data transformation
 │   ├── PowerPointGenerator.psm1        # PPTX generation (Open XML)
 │   └── HtmlGenerator.psm1             # HTML multi-view report

@@ -20,3 +20,6 @@ desktop.ini
 
 # Logs
 *.log
+
+# Offline name mapping (tenant-specific, keep example file tracked)
+NameMapping.json

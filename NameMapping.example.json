@@ -1,0 +1,20 @@
+{
+    "applications": {
+        "12345678-1234-1234-1234-123456789abc": "My Custom Enterprise App",
+        "87654321-4321-4321-4321-cba987654321": "Internal HR System",
+        "aaaabbbb-cccc-dddd-eeee-ffffaaaabbbb": "Third-Party SaaS Tool"
+    },
+    "groups": {
+        "11112222-3333-4444-5555-666677778888": "Finance Department",
+        "99990000-aaaa-bbbb-cccc-ddddeeee0000": "IT Administrators",
+        "ffffeeee-dddd-cccc-bbbb-aaaa99998888": "Executives"
+    },
+    "users": {
+        "abcdef01-2345-6789-abcd-ef0123456789": "Break Glass Account",
+        "fedcba98-7654-3210-fedc-ba9876543210": "Service Account - Billing"
+    },
+    "namedLocations": {
+        "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f67890": "Corporate Headquarters",
+        "b2c3d4e5-f6a7-8901-b2c3-d4e5f6a78901": "Branch Office - Chicago"
+    }
+}
